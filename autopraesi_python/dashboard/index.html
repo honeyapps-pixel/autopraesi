@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoPräsi Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f5f5;
+            color: #333;
+            padding: 20px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 6px;
+        }
+        .subtitle {
+            color: #888;
+            font-size: 0.9rem;
+            margin-bottom: 24px;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .card-date {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+        .badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-partial { background: #fff3cd; color: #856404; }
+        .badge-error { background: #f8d7da; color: #721c24; }
+        .card-theme {
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+        }
+        .card-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+            font-size: 0.85rem;
+            color: #666;
+        }
+        .detail-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .detail-icon { font-size: 1rem; }
+        .songs-list {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #eee;
+        }
+        .songs-list h4 {
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 6px;
+        }
+        .song {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            padding: 2px 0;
+        }
+        .song-found { color: #155724; }
+        .song-missing { color: #721c24; font-weight: 600; }
+        .missing-warning {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #fff3cd;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #856404;
+        }
+        .announcements {
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #eee;
+        }
+        .announcements h4 {
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 6px;
+        }
+        .announcement-item {
+            font-size: 0.85rem;
+            padding: 3px 0;
+            display: flex;
+            gap: 6px;
+        }
+        .error-msg {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: #f8d7da;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #721c24;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        @media (max-width: 600px) {
+            body { padding: 12px; }
+            .card-details { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <h1>AutoPräsi Dashboard</h1>
+    <p class="subtitle">Ev.-luth. Christus-Brüdergemeinde</p>
+    <div id="app"><div class="loading">Lade Daten...</div></div>
+
+    <script>
+        const SUPABASE_URL = 'https://fnzcspteoazchhszeqtf.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZuemNzcHRlb2F6Y2hoc3plcXRmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5Njg2MzUsImV4cCI6MjA4ODU0NDYzNX0.O6xg-yYQScpL8fglasn8R1PkyqUNGweTbCBrHf2Ea-U';
+
+        async function loadRuns() {
+            const resp = await fetch(
+                `${SUPABASE_URL}/rest/v1/runs?order=sunday_date.desc&limit=20`,
+                { headers: { 'apikey': SUPABASE_KEY } }
+            );
+            return resp.json();
+        }
+
+        function formatDate(dateStr) {
+            const d = new Date(dateStr + 'T00:00:00');
+            const day = d.getDate();
+            const month = d.getMonth() + 1;
+            const year = d.getFullYear();
+            const weekday = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'][d.getDay()];
+            return `${weekday} ${day}.${month}.${year}`;
+        }
+
+        function formatTimestamp(ts) {
+            const d = new Date(ts);
+            return d.toLocaleDateString('de-DE') + ' ' + d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function badgeClass(status) {
+            if (status === 'success') return 'badge-success';
+            if (status === 'partial') return 'badge-partial';
+            return 'badge-error';
+        }
+
+        function badgeText(status) {
+            if (status === 'success') return 'Erfolgreich';
+            if (status === 'partial') return 'Teilweise';
+            return 'Fehler';
+        }
+
+        function renderRun(run) {
+            let songs = [];
+            try { songs = typeof run.songs === 'string' ? JSON.parse(run.songs) : (run.songs || []); } catch(e) {}
+            let missingSongs = [];
+            try { missingSongs = typeof run.missing_songs === 'string' ? JSON.parse(run.missing_songs) : (run.missing_songs || []); } catch(e) {}
+
+            let textsHtml = '';
+            if (run.lesung_reference || run.predigt1_reference || run.predigt2_reference) {
+                textsHtml = `<div class="songs-list"><h4>Texte</h4>`;
+                if (run.lesung_reference) {
+                    textsHtml += `<div class="song"><span class="detail-icon">\ud83d\udcd6</span> <strong>Lesung:</strong> ${run.lesung_reference}</div>`;
+                }
+                if (run.predigt1_reference) {
+                    textsHtml += `<div class="song"><span class="detail-icon">\u271a</span> <strong>Predigt 1:</strong> ${run.predigt1_reference}${run.predigt1_title ? ' – ' + run.predigt1_title : ''}</div>`;
+                }
+                if (run.predigt2_reference) {
+                    textsHtml += `<div class="song"><span class="detail-icon">\u271a</span> <strong>Predigt 2:</strong> ${run.predigt2_reference}${run.predigt2_title ? ' – ' + run.predigt2_title : ''}</div>`;
+                }
+                textsHtml += `</div>`;
+            }
+
+            let announcements = [];
+            try { announcements = typeof run.announcements === 'string' ? JSON.parse(run.announcements) : (run.announcements || []); } catch(e) {}
+
+            let announcementsHtml = '';
+            if (announcements.length > 0) {
+                announcementsHtml = `<div class="announcements"><h4>Abk\u00fcndigungen</h4>`;
+                for (const a of announcements) {
+                    announcementsHtml += `<div class="announcement-item">\ud83d\udce2 ${a}</div>`;
+                }
+                announcementsHtml += `</div>`;
+            }
+
+            let songsHtml = '';
+            if (songs.length > 0) {
+                songsHtml = `<div class="songs-list"><h4>Lieder</h4>`;
+                for (const s of songs) {
+                    if (!s.name) continue;
+                    const cls = s.found ? 'song-found' : 'song-missing';
+                    const icon = s.found ? '\u2705' : '\u274c';
+                    songsHtml += `<div class="song ${cls}">${icon} <span>${s.slot}: ${s.name}</span></div>`;
+                }
+                songsHtml += `</div>`;
+            }
+
+            let warningHtml = '';
+            if (missingSongs.length > 0) {
+                warningHtml = `<div class="missing-warning">\u26a0\ufe0f ${missingSongs.length} Lied(er) nicht gefunden - Präsentation manuell prüfen!</div>`;
+            }
+
+            let errorHtml = '';
+            if (run.error_message) {
+                errorHtml = `<div class="error-msg">\u274c ${run.error_message}</div>`;
+            }
+
+            return `
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-date">${formatDate(run.sunday_date)}</span>
+                    <span class="badge ${badgeClass(run.status)}">${badgeText(run.status)}</span>
+                </div>
+                ${run.theme ? `<div class="card-theme">${run.theme}</div>` : ''}
+                <div class="card-details">
+                    ${run.kirchenkalender ? `<div class="detail-item"><span class="detail-icon">\ud83d\udcc5</span> ${run.kirchenkalender}</div>` : ''}
+                    ${run.slide_count ? `<div class="detail-item"><span class="detail-icon">\ud83d\udcca</span> ${run.slide_count} Folien</div>` : ''}
+                    ${run.image_found !== null ? `<div class="detail-item"><span class="detail-icon">\ud83d\uddbc\ufe0f</span> Bild: ${run.image_found ? 'Ja' : 'Nein'}</div>` : ''}
+                    ${run.output_file ? `<div class="detail-item"><span class="detail-icon">\ud83d\udcc4</span> ${run.output_file}</div>` : ''}
+                    ${run.duration_seconds ? `<div class="detail-item"><span class="detail-icon">\u23f1\ufe0f</span> ${run.duration_seconds}s</div>` : ''}
+                    <div class="detail-item"><span class="detail-icon">\ud83d\udd52</span> ${formatTimestamp(run.created_at)}</div>
+                </div>
+                ${textsHtml}
+                ${songsHtml}
+                ${announcementsHtml}
+                ${warningHtml}
+                ${errorHtml}
+            </div>`;
+        }
+
+        async function init() {
+            const app = document.getElementById('app');
+            try {
+                const runs = await loadRuns();
+                if (runs.length === 0) {
+                    app.innerHTML = '<div class="empty">Noch keine Läufe vorhanden.</div>';
+                    return;
+                }
+                app.innerHTML = runs.map(renderRun).join('');
+            } catch (e) {
+                app.innerHTML = `<div class="error-msg">Fehler beim Laden: ${e.message}</div>`;
+            }
+        }
+
+        init();
+        // Auto-refresh alle 60 Sekunden
+        setInterval(init, 60000);
+    </script>
+</body>
+</html>

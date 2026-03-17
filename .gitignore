@@ -1,0 +1,23 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+venv/
+logs/
+
+# Node
+node_modules/
+.next/
+
+# Generated files
+*.pptx
+!v_1_4_3_ab2026/*.pptx
+
+# Vercel
+.vercel/
+
+# Temp
+*.log
+nohup.out
