@@ -44,19 +44,30 @@ def next_sunday(from_date: date = None) -> date:
 
 
 def _find_image(date_str: str):
-    """Sucht das Hintergrundbild für den Gottesdienst (z.B. 'Bild 08.03..jpg')."""
+    """Sucht das Hintergrundbild für den Gottesdienst.
+
+    Prüft mehrere Namensformate:
+      - 'Bild 22.03.jpg' (mit Prefix und führender Null)
+      - '22.3.jpg'        (ohne Prefix, ohne führende Null)
+    """
     if not date_str:
         return None
-    # date_str ist z.B. "08.03.2026" → wir brauchen "08.03."
     parts = date_str.split(".")
-    if len(parts) < 2:
+    if len(parts) < 3:
         return None
-    name = f"Bild {parts[0]}.{parts[1]}..jpg"
-    path = os.path.join(IMAGE_DIR, name)
-    if os.path.exists(path):
-        log.info(f"Hintergrundbild gefunden: {name}")
-        return path
-    log.warning(f"Hintergrundbild nicht gefunden: {path}")
+    day, month = parts[0], parts[1]
+    day_short = str(int(day))
+    month_short = str(int(month))
+    candidates = [
+        f"Bild {day}.{month}.jpg",
+        f"{day_short}.{month_short}.jpg",
+    ]
+    for name in candidates:
+        path = os.path.join(IMAGE_DIR, name)
+        if os.path.exists(path):
+            log.info(f"Hintergrundbild gefunden: {name}")
+            return path
+    log.warning(f"Hintergrundbild nicht gefunden (gesucht: {', '.join(candidates)})")
     return None
 
 

@@ -102,10 +102,7 @@ TOGGLEABLE_SECTIONS = {
         "label": "Lied 2 (Lobpreis)",
         "slides": [9],             # Folie 10
     },
-    "song3": {
-        "label": "Lied 3 (Kinderlied)",
-        "slides": [14],            # Folie 15
-    },
+    # song3 ist in "kinderstunde" eingebettet (Folie 15 = Index 14)
     "song4": {
         "label": "Lied 4",
         "slides": [21],            # Folie 22
@@ -128,8 +125,8 @@ TOGGLEABLE_SECTIONS = {
         "slides": [6, 7],          # Folien 7-8
     },
     "kinderstunde": {
-        "label": "Kinder zur Kinderstunde",
-        "slides": [13, 15],        # Folien 14, 16
+        "label": "Kinderstunde + Kinderlied",
+        "slides": [13, 14, 15],    # Folien 14-16 (inkl. Song3)
     },
     "lesung": {
         "label": "Lesung",
@@ -153,6 +150,46 @@ TOGGLEABLE_SECTIONS = {
         "slides": [33],            # Folie 34
     },
 }
+
+# Standard-Reihenfolge der Abschnitte (für Drag & Drop Umordnung)
+DEFAULT_SECTION_ORDER = [
+    "begruessung",
+    "song1",
+    "glaubensbekenntnis",
+    "song2",
+    "lesung",
+    "kinderstunde",      # enthält song3 (Kinderlied)
+    "predigt1",
+    "song4",
+    "gebetszeit",
+    "song5",
+    "predigt2",
+    "song6",
+    "einladung",
+    "song7",
+]
+
+# Jeder Block enthält seine Template-Folien + nachfolgende Thema-Folie
+# (0-basierte Indizes)
+SECTION_BLOCKS = {
+    "begruessung": [2, 3],
+    "song1": [4, 5],
+    "glaubensbekenntnis": [6, 7, 8],
+    "song2": [9, 10],
+    "lesung": [11, 12],
+    "kinderstunde": [13, 14, 15, 16],  # KS-Intro + Song3 + KS-Outro + Thema
+    "predigt1": [17, 18, 19, 20],
+    "song4": [21, 22],
+    "gebetszeit": [23, 24],
+    "song5": [25, 26],
+    "predigt2": [27, 28, 29, 30],
+    "song6": [31, 32],
+    "einladung": [33, 34],
+    "song7": [35, 36],
+}
+
+# Intro-Folien (immer am Anfang, nicht verschiebbar)
+INTRO_SLIDES = [0, 1]
 
 # Maximale Zeichen pro Folie für Bibeltexte (Cambria 32pt)
 MAX_CHARS_PER_SLIDE = 500

@@ -11,7 +11,7 @@ from datetime import date, datetime
 
 import openpyxl
 
-from config import (GODI_PLAN_DIR, EXCEL_ROWS, ABKUENDIGUNGEN_ROWS, LOBPREIS_SLOTS,
+from config import (GODI_PLAN_DIR, EXCEL_ROWS, ABKUENDIGUNGEN_ROWS,
                      EINLADUNG_ROW_START, EINLADUNG_ROW_END, EINLADUNG_COLS)
 
 log = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ def _scan_by_color(ws) -> tuple:
 
     Returns:
         (song_raws, lesung_ref, predigt_refs)
-        - song_raws: Liste von (row, raw_text) für alle grünen Lied-Zellen
+        - song_raws: Liste von (row, raw_text, col_b) für alle grünen Lied-Zellen
         - lesung_ref: Erster orangefarbener Bibelstellen-Eintrag
         - predigt_refs: Liste roter Bibelstellen-Einträge (erste=Predigt1, zweite=Predigt2)
     """
@@ -130,8 +130,9 @@ def _scan_by_color(ws) -> tuple:
         val = str(cell.value).strip() if cell.value else ""
 
         if color == SONG_COLOR and _looks_like_song(val):
-            song_raws.append((row, val))
-            log.debug(f"Farb-Scan: Lied in Zeile {row}: {val[:60]}")
+            col_b = str(ws.cell(row=row, column=2).value or "").strip()
+            song_raws.append((row, val, col_b))
+            log.debug(f"Farb-Scan: Lied in Zeile {row}: {val[:60]} (B={col_b})")
 
         elif color == LESUNG_COLOR and _looks_like_single_bible_ref(val) and not lesung_ref:
             lesung_ref = val
@@ -144,8 +145,14 @@ def _scan_by_color(ws) -> tuple:
     return song_raws, lesung_ref, predigt_refs
 
 
-def parse_song_entry(raw: str, slot_key: str) -> SongEntry:
-    """Parst einen Lied-Eintrag aus der Excel-Zelle."""
+def parse_song_entry(raw: str, slot_key: str = "", col_b: str = "") -> SongEntry:
+    """Parst einen Lied-Eintrag aus der Excel-Zelle.
+
+    Args:
+        raw: Zellinhalt aus Spalte D
+        slot_key: Template-Slot (z.B. "song1") – wird ggf. später überschrieben
+        col_b: Zellinhalt aus Spalte B für zusätzliche Kategorie-Erkennung
+    """
     if not raw or not raw.strip():
         return SongEntry(raw="", slot_key=slot_key)
 
@@ -171,6 +178,11 @@ def parse_song_entry(raw: str, slot_key: str) -> SongEntry:
             text = text.split(":", 1)[1].strip()
     else:
         song.category = "Gemeindelied"
+
+    # Spalte B als zusätzliches Signal für Lobpreisstrophe
+    # z.B. B="Lobpreisstrophe", D="FJ1 28 - In dir ist mein Leben"
+    if song.category == "Gemeindelied" and col_b.lower().startswith("lobpreisstrophe"):
+        song.category = "Lobpreisstrophe"
 
     # Buch und Nummer extrahieren: "FJ1 235 - Jesus, dir nach"
     # Oder nur Titel bei Kinderliedern: "Gottes große Liebe"
@@ -200,12 +212,6 @@ def parse_song_entry(raw: str, slot_key: str) -> SongEntry:
         # Kein " - " → reiner Titel (Kinderlieder, etc.)
         song.title = text.strip()
 
-    # Lobpreisstrophe auto-detect: Slots song2/song6 immer als Lobpreisstrophe
-    # behandeln, auch wenn kein Prefix im Excel-Eintrag steht
-    if song.category == "Gemeindelied" and slot_key in LOBPREIS_SLOTS:
-        song.category = "Lobpreisstrophe"
-        log.info(f"Auto-detect Lobpreisstrophe für Slot {slot_key}: {raw[:50]}")
-
     # Erste 3 Wörter des Titels für die Suche (v1.4.2)
     if song.title:
         words = song.title.split()
@@ -213,6 +219,95 @@ def parse_song_entry(raw: str, slot_key: str) -> SongEntry:
 
     log.debug(f"Parsed song: {song}")
     return song
+
+
+def _assign_songs_to_slots(song_raws: list) -> list:
+    """Weist Lieder nach liturgischer Rolle den Template-Slots zu.
+
+    Statt Lieder sequentiell song1–song7 zuzuweisen, werden sie nach
+    Kategorie auf die richtigen Template-Positionen verteilt:
+      - song3: Kinderlied (vor Kinderstunde)
+      - song2, song6: Lobpreisstrophen
+      - song1, song4, song5, song7: Gemeindelieder (song7 = Schlusslied)
+
+    Args:
+        song_raws: Liste von (row, raw_text, col_b) aus dem Farb-Scan
+    """
+    # Alle Lieder parsen (ohne feste Slot-Zuweisung)
+    all_songs = []
+    for row, raw, col_b in song_raws:
+        song = parse_song_entry(raw, col_b=col_b)
+        all_songs.append(song)
+
+    # Nach Kategorie aufteilen
+    kinderlieder = [s for s in all_songs if s.category == "Kinderlied"]
+    lobpreis = [s for s in all_songs if s.category == "Lobpreisstrophe"]
+    gemeinde = [s for s in all_songs
+                if s.category in ("Gemeindelied", "Sonstige Lieder")]
+
+    slots = {}
+
+    # Kinderlied → song3
+    if kinderlieder:
+        slots["song3"] = kinderlieder[0]
+        if len(kinderlieder) > 1:
+            log.warning(f"{len(kinderlieder)} Kinderlieder gefunden, "
+                        f"nur das erste wird verwendet")
+
+    # Lobpreisstrophen → song2, song6
+    if len(lobpreis) >= 1:
+        slots["song2"] = lobpreis[0]
+    if len(lobpreis) >= 2:
+        slots["song6"] = lobpreis[1]
+    if len(lobpreis) > 2:
+        log.warning(f"{len(lobpreis)} Lobpreisstrophen gefunden, "
+                    f"nur die ersten 2 werden verwendet")
+
+    # Gemeindelieder → song1 (Eröffnung), song4, song5, song7 (Schlusslied)
+    # Überzählige → song_extra1, song_extra2, ...
+    if len(gemeinde) >= 2:
+        # Erstes Gemeindelied → song1, letztes → song7 (Schlusslied)
+        slots["song1"] = gemeinde[0]
+        slots["song7"] = gemeinde[-1]
+        # Mittlere Gemeindelieder → song4, song5, dann Extras
+        middle = gemeinde[1:-1]
+        middle_slots = ["song4", "song5"]
+        for i, song in enumerate(middle):
+            if i < len(middle_slots):
+                slots[middle_slots[i]] = song
+            else:
+                extra_key = f"song_extra{i - len(middle_slots) + 1}"
+                slots[extra_key] = song
+                log.info(f"Extra-Lied: {song.raw[:40]} → {extra_key}")
+    elif len(gemeinde) == 1:
+        slots["song1"] = gemeinde[0]
+    else:
+        log.warning("Keine Gemeindelieder im Farb-Scan gefunden")
+
+    # Ergebnis-Liste aufbauen
+    all_slots = ["song1", "song2", "song3", "song4", "song5", "song6", "song7"]
+    # Extra-Slots hinzufügen
+    extra_slots = sorted([k for k in slots if k.startswith("song_extra")])
+    all_slots.extend(extra_slots)
+
+    result = []
+    for slot_key in all_slots:
+        if slot_key in slots:
+            song = slots[slot_key]
+            song.slot_key = slot_key
+            result.append(song)
+        else:
+            result.append(SongEntry(raw="", slot_key=slot_key))
+            log.warning(f"Slot {slot_key}: kein passendes Lied gefunden")
+
+    # Zusammenfassung loggen
+    assigned = [s for s in all_songs if any(s is slots.get(k) for k in all_slots)]
+    skipped = [s for s in all_songs if s not in assigned]
+    if skipped:
+        log.warning(f"{len(skipped)} Lied(er) nicht zugewiesen: "
+                    f"{[s.raw[:40] for s in skipped]}")
+
+    return result
 
 
 def _parse_header(header: str) -> tuple:
@@ -418,9 +513,43 @@ def read_godi_plan_by_sheet(sheet_name: str, excel_path: str,
         if len(predigt_refs_color) < 2:
             log.warning("Predigt2: Farb-Erkennung fehlgeschlagen, nutze feste Zeile")
 
-    # Predigt-Titel: noch über feste Zeilen (stehen nicht farbig markiert)
-    data.predigt1_title = cell("predigt1_titel")
-    data.predigt2_title = cell("predigt2_titel")
+    # Predigt-Titel und -Referenz dynamisch über Spalte B suchen
+    # (feste Zeilen funktionieren nicht bei variablen Gottesdienst-Layouts)
+    predigt1_found = False
+    predigt2_found = False
+    for row in range(1, ws.max_row + 1):
+        col_b = ws.cell(row=row, column=2).value
+        if not col_b or not isinstance(col_b, str):
+            continue
+        col_b_lower = col_b.strip().lower()
+
+        if "predigt 1" in col_b_lower or "predigt1" in col_b_lower:
+            ref = ws.cell(row=row, column=4).value
+            title = ws.cell(row=row, column=5).value
+            if ref:
+                data.predigt1_reference = str(ref).strip()
+            if title:
+                data.predigt1_title = str(title).strip()
+            predigt1_found = True
+            log.info(f"Predigt1 (Spalte B Zeile {row}): ref=\"{data.predigt1_reference}\" titel=\"{data.predigt1_title}\"")
+
+        elif "predigt 2" in col_b_lower or "predigt2" in col_b_lower:
+            ref = ws.cell(row=row, column=4).value
+            title = ws.cell(row=row, column=5).value
+            if ref:
+                data.predigt2_reference = str(ref).strip()
+            if title:
+                data.predigt2_title = str(title).strip()
+            predigt2_found = True
+            log.info(f"Predigt2 (Spalte B Zeile {row}): ref=\"{data.predigt2_reference}\" titel=\"{data.predigt2_title}\"")
+
+    if not predigt1_found:
+        # Fallback auf feste Zeile
+        if not data.predigt1_title:
+            data.predigt1_title = cell("predigt1_titel")
+    if not predigt2_found:
+        if not data.predigt2_title:
+            data.predigt2_title = cell("predigt2_titel")
 
     # Abendmahl-Erkennung
     abendmahl_val = cell("abendmahl")
@@ -429,19 +558,7 @@ def read_godi_plan_by_sheet(sheet_name: str, excel_path: str,
     # === Lieder: Farb-Scan ===
     if len(song_raws) >= 2:
         log.info(f"Farb-Scan: {len(song_raws)} Lieder gefunden")
-        if len(song_raws) > 7:
-            log.warning(f"Mehr als 7 Lieder gefunden ({len(song_raws)}), "
-                        f"nur die ersten 7 werden verwendet")
-            song_raws = song_raws[:7]
-        slot_keys = ["song1", "song2", "song3", "song4", "song5", "song6", "song7"]
-        for i, slot_key in enumerate(slot_keys):
-            if i < len(song_raws):
-                _, raw = song_raws[i]
-                song = parse_song_entry(raw, slot_key)
-            else:
-                song = SongEntry(raw="", slot_key=slot_key)
-                log.warning(f"Slot {slot_key}: kein Lied im Farb-Scan gefunden")
-            data.songs.append(song)
+        data.songs = _assign_songs_to_slots(song_raws)
     else:
         # Fallback: feste Zeilen-Mappings
         log.warning(f"Farb-Scan lieferte nur {len(song_raws)} Lieder – "

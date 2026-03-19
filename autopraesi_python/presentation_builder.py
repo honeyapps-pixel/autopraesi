@@ -12,7 +12,9 @@ from pptx import Presentation
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml.ns import qn
 
-from config import TEMPLATE_PATH, OUTPUT_DIR_DESKTOP, OUTPUT_DIR_DROPBOX
+from config import (TEMPLATE_PATH, OUTPUT_DIR_DESKTOP, OUTPUT_DIR_DROPBOX,
+                    DEFAULT_SECTION_ORDER, SECTION_BLOCKS, INTRO_SLIDES,
+                    TOGGLEABLE_SECTIONS)
 from slide_copier import build_presentation_from_plan, copy_slide
 from bible_fetcher import fetch_bible_text
 
@@ -62,16 +64,20 @@ def _replace_text_in_slide(slide, old_text, new_text):
 
 def build_presentation(data, song_paths: dict, image_path: str = None,
                        fetch_bible: bool = True, output_name: str = None,
-                       skip_slides: set = None) -> str:
+                       skip_slides: set = None, section_order: list = None,
+                       extra_songs: dict = None, text_color: str = "white",
+                       title_layout: dict = None, subtitle_layout: dict = None) -> str:
     """Erstellt die komplette Gottesdienst-Präsentation.
 
     Args:
         data: GodiPlanData-Objekt
-        song_paths: Dict {slot_key: pfad} für die 7 Lieder
+        song_paths: Dict {slot_key: pfad} für die Lieder (inkl. Extras)
         image_path: Pfad zum Hintergrundbild (optional)
         fetch_bible: Ob Bibeltexte geladen werden sollen
         output_name: Dateiname (optional, z.B. 'Pa 18.3_ungeprüft.pptx')
         skip_slides: Set von 0-basierten Template-Folien-Indizes die übersprungen werden
+        section_order: Liste von Section-Keys in gewünschter Reihenfolge
+        extra_songs: Dict {slot_key: pfad} für Extra-Lieder (song_extra1, ...)
 
     Returns:
         Pfad zur erstellten Präsentation
@@ -83,8 +89,16 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
         output_name = f"So {day.lstrip('0')}.{month.lstrip('0')}_ungeprüft.pptx"
     output_path = os.path.join(OUTPUT_DIR_DESKTOP, output_name)
 
+    # Extra-Songs: song_extra* Pfade aus song_paths extrahieren
+    all_extra = {k: v for k, v in song_paths.items() if k.startswith("song_extra")}
+    if extra_songs:
+        all_extra.update(extra_songs)
+    regular_paths = {k: v for k, v in song_paths.items() if not k.startswith("song_extra")}
+
     # === Phase 1: Folienplan erstellen ===
-    slide_plan = _build_slide_plan(song_paths, skip_slides=skip_slides)
+    slide_plan = _build_slide_plan(regular_paths, skip_slides=skip_slides,
+                                   section_order=section_order,
+                                   extra_song_paths=all_extra)
 
     # === Phase 2: Präsentation aus Plan bauen ===
     log.info("Baue Präsentation aus Folienplan...")
@@ -96,6 +110,14 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
 
     # === Phase 4: Texte ersetzen ===
     _fill_all_text(prs, data, fetch_bible, template_indices)
+
+    # === Phase 4b: Textfarbe auf Thema-Folien anpassen ===
+    if text_color == "black":
+        _set_theme_text_color(prs, "000000")
+
+    # === Phase 4c: Text-Layout auf Thema-Folien anpassen ===
+    if title_layout or subtitle_layout:
+        _apply_theme_text_layout(prs, title_layout, subtitle_layout)
 
     # === Phase 5: Speichern ===
     prs.save(output_path)
@@ -149,34 +171,210 @@ def _set_theme_image(prs, image_path: str):
     log.info(f"Hintergrundbild auf {count} Folien ersetzt")
 
 
-def _build_slide_plan(song_paths: dict, skip_slides: set = None) -> list:
+def _set_theme_text_color(prs, hex_color: str):
+    """Ändert die Textfarbe auf allen Thema-Folien (mit Hintergrundbild).
+
+    Findet Folien die das Thema/Datum enthalten und setzt die Textfarbe
+    aller Runs auf den angegebenen Hex-Wert.
+    """
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    count = 0
+
+    for slide in prs.slides:
+        slide_text = _get_slide_text(slide)
+        # Thema-Folien erkennen: enthalten "Gottesdienst am" und Theme-Text
+        if "Gottesdienst am" not in slide_text:
+            continue
+
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            for para in shape.text_frame.paragraphs:
+                for run in para.runs:
+                    rPr = run._r.find(f'{{{a_ns}}}rPr')
+                    if rPr is None:
+                        rPr = etree.SubElement(run._r, f'{{{a_ns}}}rPr')
+                        run._r.insert(0, rPr)
+
+                    # Bestehende Farbdefinition entfernen
+                    for old_fill in rPr.findall(f'{{{a_ns}}}solidFill'):
+                        rPr.remove(old_fill)
+
+                    # Neue Farbe setzen
+                    solidFill = etree.SubElement(rPr, f'{{{a_ns}}}solidFill')
+                    srgbClr = etree.SubElement(solidFill, f'{{{a_ns}}}srgbClr')
+                    srgbClr.set('val', hex_color)
+
+        count += 1
+
+    log.info(f"Textfarbe auf {count} Thema-Folien auf #{hex_color} gesetzt")
+
+
+def _apply_theme_text_layout(prs, title_layout: dict = None, subtitle_layout: dict = None):
+    """Passt Position und Größe der Textboxen auf Thema-Folien an.
+
+    Layout-Werte sind in % der Foliengröße.
+    fontSize ist in cqi-Einheiten (Container Query Inline) im Frontend,
+    hier umgerechnet in PowerPoint-Punkte.
+    """
+    from pptx.util import Emu, Pt
+
+    slide_w = prs.slide_width  # 9144000 EMU
+    slide_h = prs.slide_height  # 6858000 EMU
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+    # fontSize: Frontend cqi → pt Umrechnung
+    # 6.6 cqi entspricht 66pt bei voller Folie
+    CQI_TO_PT = 10.0  # 1 cqi ≈ 10pt
+
+    for slide in prs.slides:
+        slide_text = _get_slide_text(slide)
+        if "Gottesdienst am" not in slide_text:
+            continue
+
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+
+            shape_text = shape.text_frame.text.strip()
+            layout = None
+
+            # Titel erkennen: das Shape mit dem Theme-Text (groß, oben)
+            if title_layout and shape.name == "Titel 1":
+                layout = title_layout
+            elif subtitle_layout and shape.name == "CustomShape 1":
+                layout = subtitle_layout
+
+            # Fallback: nach Position identifizieren
+            if not layout and title_layout:
+                if shape.top < slide_h * 0.4 and shape.height > slide_h * 0.15:
+                    layout = title_layout
+            if not layout and subtitle_layout:
+                if shape.top > slide_h * 0.6:
+                    layout = subtitle_layout
+
+            if not layout:
+                continue
+
+            # Position und Größe setzen
+            shape.left = int(slide_w * layout["x"] / 100)
+            shape.top = int(slide_h * layout["y"] / 100)
+            shape.width = int(slide_w * layout["w"] / 100)
+            shape.height = int(slide_h * layout["h"] / 100)
+
+            # Schriftgröße
+            if "fontSize" in layout:
+                pt_size = int(layout["fontSize"] * CQI_TO_PT)
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.font.size = Pt(pt_size)
+
+            # Text horizontal und vertikal zentrieren
+            from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+            for para in shape.text_frame.paragraphs:
+                para.alignment = PP_ALIGN.CENTER
+            # Vertikale Zentrierung
+            txBody = shape._element.find(f'{{{a_ns}}}txBody')
+            if txBody is None:
+                txBody = shape._element.find('.//{%s}txBody' % a_ns)
+            if txBody is not None:
+                bodyPr = txBody.find(f'{{{a_ns}}}bodyPr')
+                if bodyPr is not None:
+                    bodyPr.set('anchor', 'ctr')
+
+    log.info("Theme-Text-Layout angepasst")
+
+
+def _build_slide_plan(song_paths: dict, skip_slides: set = None,
+                      section_order: list = None,
+                      extra_song_paths: dict = None) -> list:
     """Erstellt den Folienplan: welche Folien in welcher Reihenfolge.
 
-    Template hat 37 Folien (0-36). An bestimmten Positionen werden
-    Platzhalter-Folien durch Lied-Dateien ersetzt.
-    skip_slides: Set von 0-basierten Indizes die übersprungen werden.
+    Template hat 37 Folien (0-36). Abschnitte werden in der gegebenen
+    Reihenfolge (section_order) angeordnet. An Song-Positionen werden
+    Platzhalter durch Lied-Dateien ersetzt.
+
+    Args:
+        song_paths: Dict {slot_key: pfad} für die regulären Lieder
+        skip_slides: Set von 0-basierten Indizes die übersprungen werden
+        section_order: Liste von Section-Keys in gewünschter Reihenfolge
+        extra_song_paths: Dict {song_extra1: pfad, ...} für Extra-Lieder
     """
     plan = []
     song_slot_indices = set(SONG_SLOTS.values())
     skip = skip_slides or set()
+    order = section_order or DEFAULT_SECTION_ORDER
 
-    for i in range(37):  # Template hat 37 Folien
+    # Disabled sections: alle Slides dieser Sections zu skip hinzufügen
+    disabled_sections = set()
+    for section_key in TOGGLEABLE_SECTIONS:
+        section_slides = set(TOGGLEABLE_SECTIONS[section_key]["slides"])
+        if section_slides.issubset(skip):
+            disabled_sections.add(section_key)
+
+    def _add_slide(i):
+        """Fügt eine einzelne Folie zum Plan hinzu (mit Song-Ersetzung)."""
         if i in skip:
             log.info(f"Plan: Folie {i+1} übersprungen (deaktiviert)")
-            continue
+            return
         if i in song_slot_indices:
-            # Diese Folie ist ein Lied-Platzhalter
             slot_key = [k for k, v in SONG_SLOTS.items() if v == i][0]
             song_path = song_paths.get(slot_key)
             if song_path and os.path.exists(song_path):
                 plan.append(("file", song_path))
                 log.info(f"Plan: {slot_key} → {os.path.basename(song_path)}")
             else:
-                # Kein Lied gefunden → Platzhalter beibehalten
                 plan.append(("template", i))
                 log.warning(f"Plan: {slot_key} → Platzhalter (kein Lied)")
         else:
             plan.append(("template", i))
+
+    # 1. Intro-Folien (immer am Anfang)
+    for i in INTRO_SLIDES:
+        _add_slide(i)
+
+    # 2. Abschnitte in der gewünschten Reihenfolge
+    extras = extra_song_paths or {}
+    extras_in_order = set()  # Track welche Extras explizit platziert wurden
+
+    for section_key in order:
+        # Extra-Lied an dieser Position einfügen
+        if section_key.startswith("song_extra"):
+            extras_in_order.add(section_key)
+            if section_key in disabled_sections:
+                log.info(f"Plan: {section_key} deaktiviert, übersprungen")
+                continue
+            extra_path = extras.get(section_key)
+            if extra_path and os.path.exists(extra_path):
+                # Thema-Folie + Extra-Lied + Thema-Folie
+                plan.append(("template", INTRO_SLIDES[-1]))
+                plan.append(("file", extra_path))
+                plan.append(("template", INTRO_SLIDES[-1]))
+                log.info(f"Plan: {section_key} → {os.path.basename(extra_path)} (Extra)")
+            else:
+                log.warning(f"Plan: {section_key} → kein Pfad gefunden")
+            continue
+
+        if section_key not in SECTION_BLOCKS:
+            log.warning(f"Plan: Unbekannter Abschnitt '{section_key}', übersprungen")
+            continue
+        if section_key in disabled_sections:
+            log.info(f"Plan: Abschnitt '{section_key}' deaktiviert, übersprungen")
+            continue
+
+        block_slides = SECTION_BLOCKS[section_key]
+        for i in block_slides:
+            _add_slide(i)
+
+    # Extras die nicht in der Order waren, am Ende einfügen
+    for extra_key in sorted(extras.keys()):
+        if extra_key not in extras_in_order:
+            extra_path = extras[extra_key]
+            if extra_path and os.path.exists(extra_path):
+                plan.append(("template", INTRO_SLIDES[-1]))
+                plan.append(("file", extra_path))
+                plan.append(("template", INTRO_SLIDES[-1]))
+                log.info(f"Plan: {extra_key} → {os.path.basename(extra_path)} (Extra, Ende)")
 
     return plan
 
@@ -494,7 +692,7 @@ def _fill_slide_simple(slide, data, is_template=True):
     if "Gottes Liebe erkennen" in slide_text:
         _replace_text_in_slide(slide, "Gottes Liebe erkennen", data.theme)
         _replace_text_in_slide(slide, "Gottesdienst am 26.11.2023,",
-                               f"Gottesdienst am {data.date_str} ,")
+                               f"Gottesdienst am {data.date_str},")
         _replace_text_in_slide(slide, "Letzter Sonntag des Kirchenjahres",
                                data.kirchenkalender)
         # Titel-Box vergrößern damit kein Overflow über Folienrand
@@ -508,7 +706,7 @@ def _fill_slide_simple(slide, data, is_template=True):
     if "Gottesdienst am XY.XY.XY" in slide_text:
         _replace_text_in_slide(slide, "Thema", data.theme)
         _replace_text_in_slide(slide, "Gottesdienst am XY.XY.XY",
-                               f"Gottesdienst am {data.date_str} ,")
+                               f"Gottesdienst am {data.date_str},")
         _replace_text_in_slide(slide, "Name des Sonntags", data.kirchenkalender)
         # Titel-Box vergrößern damit kein Overflow über Folienrand
         for shape in slide.shapes:

@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from config import IMAGE_DIR, OUTPUT_DIR_DESKTOP, TOGGLEABLE_SECTIONS
+from config import (IMAGE_DIR, OUTPUT_DIR_DESKTOP, TOGGLEABLE_SECTIONS,
+                    DEFAULT_SECTION_ORDER)
 from excel_reader import list_all_sheets, read_godi_plan_by_sheet, GodiPlanData, parse_song_entry
 from song_finder import build_song_index, find_song
 from presentation_builder import build_presentation
@@ -40,15 +41,20 @@ def _get_song_index():
 
 
 def _find_image(date_str: str) -> str | None:
-    """Sucht das Hintergrundbild (z.B. 'Bild 08.03..jpg')."""
+    """Sucht das Hintergrundbild ('Bild 22.03.jpg' oder '22.3.jpg')."""
     if not date_str:
         return None
     parts = date_str.split(".")
-    if len(parts) < 2:
+    if len(parts) < 3:
         return None
-    name = f"Bild {parts[0]}.{parts[1]}..jpg"
-    path = os.path.join(IMAGE_DIR, name)
-    return path if os.path.exists(path) else None
+    day, month = parts[0], parts[1]
+    day_short = str(int(day))
+    month_short = str(int(month))
+    for name in [f"Bild {day}.{month}.jpg", f"{day_short}.{month_short}.jpg"]:
+        path = os.path.join(IMAGE_DIR, name)
+        if os.path.exists(path):
+            return path
+    return None
 
 
 # --- Models ---
@@ -81,6 +87,10 @@ class GenerateRequest(BaseModel):
     overrides: dict | None = None
     fetch_bible: bool = True
     disabled_sections: list[str] | None = None  # z.B. ["glaubensbekenntnis", "kinderstunde"]
+    section_order: list[str] | None = None  # z.B. ["begruessung", "song1", ...]
+    text_color: str = "white"  # "white" oder "black"
+    title_layout: dict | None = None  # {x, y, w, h, fontSize} in %
+    subtitle_layout: dict | None = None
 
 
 # --- Endpoints ---
@@ -94,11 +104,15 @@ def get_sheets():
 
 @app.get("/api/sections", response_model=list[SectionInfo])
 def get_sections():
-    """Alle togglebaren Abschnitte im Template."""
-    return [
-        SectionInfo(key=key, label=sec["label"], default_enabled=True)
-        for key, sec in TOGGLEABLE_SECTIONS.items()
-    ]
+    """Alle Abschnitte in der Standard-Reihenfolge (für Drag & Drop)."""
+    result = []
+    for key in DEFAULT_SECTION_ORDER:
+        if key in TOGGLEABLE_SECTIONS:
+            result.append(SectionInfo(
+                key=key, label=TOGGLEABLE_SECTIONS[key]["label"],
+                default_enabled=True,
+            ))
+    return result
 
 
 @app.get("/api/sheet/{sheet_name}")
@@ -145,6 +159,67 @@ def get_sheet_data(sheet_name: str, excel_path: str):
     }
 
 
+@app.get("/api/sheet/{sheet_name}/rows")
+def get_sheet_rows(sheet_name: str, excel_path: str):
+    """Gibt die rohen Excel-Zeilen eines Sheets zurück (Uhrzeit, Programm, Details)."""
+    import datetime
+    wb = __import__("openpyxl").load_workbook(excel_path, data_only=True)
+    ws = None
+    for name in wb.sheetnames:
+        if name.strip() == sheet_name:
+            ws = wb[name]
+            break
+    if ws is None:
+        wb.close()
+        raise HTTPException(404, f"Sheet '{sheet_name}' nicht gefunden")
+
+    def fmt(val):
+        if val is None:
+            return ""
+        if isinstance(val, (datetime.time, datetime.datetime)):
+            return val.strftime("%H:%M")
+        return str(val).strip()
+
+    rows = []
+    for r in range(1, ws.max_row + 1):
+        uhrzeit = fmt(ws.cell(row=r, column=1).value)
+        programm = fmt(ws.cell(row=r, column=2).value)
+        details = fmt(ws.cell(row=r, column=4).value)
+        if not uhrzeit and not programm and not details:
+            continue
+        rows.append({
+            "row": r,
+            "uhrzeit": uhrzeit,
+            "programmpunkt": programm,
+            "details": details,
+        })
+    wb.close()
+    return rows
+
+
+@app.get("/api/search-song")
+def search_song(raw: str):
+    """Sucht ein Lied in der Bibliothek anhand des Rohtexts."""
+    if not raw.strip():
+        return {"found": False, "file_name": "", "path": ""}
+    song = parse_song_entry(raw.strip())
+    index = _get_song_index()
+    path = find_song(song, index)
+    return {
+        "found": path is not None,
+        "file_name": os.path.basename(path) if path else "",
+        "path": path or "",
+    }
+
+
+@app.get("/api/image")
+def get_image(path: str):
+    """Gibt ein Bild als Datei zurück (für Vorschau im Frontend)."""
+    if not os.path.isfile(path):
+        raise HTTPException(404, "Bild nicht gefunden")
+    return FileResponse(path)
+
+
 @app.post("/api/upload-image")
 async def upload_image(file: UploadFile = File(...)):
     """Lädt ein Bild hoch und gibt den temporären Pfad zurück."""
@@ -182,14 +257,30 @@ def generate_presentation(req: GenerateRequest):
             data.predigt2_title = o["predigt2_title"]
         if "announcements" in o:
             data.announcements = o["announcements"]
+        if "invitation_events" in o:
+            from excel_reader import InvitationEvent
+            data.invitation_events = [
+                InvitationEvent(
+                    date_str=e.get("date_str", ""),
+                    time_str=e.get("time_str", ""),
+                    event_name=e.get("event_name", ""),
+                    note=e.get("note", ""),
+                )
+                for e in o["invitation_events"]
+            ]
 
-        # Song-Overrides
+        # Song-Overrides (inkl. neue Extra-Songs)
         if "songs" in o and o["songs"]:
             for slot_key, raw_text in o["songs"].items():
+                found = False
                 for i, song in enumerate(data.songs):
                     if song.slot_key == slot_key:
                         data.songs[i] = parse_song_entry(raw_text, slot_key)
+                        found = True
                         break
+                # Neuer Extra-Song (manuell hinzugefügt)
+                if not found and slot_key.startswith("song_extra") and raw_text.strip():
+                    data.songs.append(parse_song_entry(raw_text, slot_key))
 
     # Skip-Slides berechnen aus disabled_sections
     skip_slides = set()
@@ -226,6 +317,10 @@ def generate_presentation(req: GenerateRequest):
             fetch_bible=req.fetch_bible,
             output_name=output_name,
             skip_slides=skip_slides if skip_slides else None,
+            section_order=req.section_order,
+            text_color=req.text_color,
+            title_layout=req.title_layout,
+            subtitle_layout=req.subtitle_layout,
         )
     except Exception as e:
         log.error(f"Fehler beim Generieren: {e}", exc_info=True)

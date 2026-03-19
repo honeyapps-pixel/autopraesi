@@ -14,10 +14,10 @@ BOOK_MAPPING = {
     "1. mose": "GEN", "2. mose": "EXO", "3. mose": "LEV",
     "4. mose": "NUM", "5. mose": "DEU",
     "josua": "JOS", "richter": "JDG", "rut": "RUT",
-    "1. samuel": "1SA", "2. samuel": "2SA",
-    "1. könige": "1KI", "1. kön": "1KI",
-    "2. könige": "2KI", "2. kön": "2KI",
-    "1. chronik": "1CH", "2. chronik": "2CH",
+    "1. samuel": "1SA", "2. samuel": "2SA", "1sam": "1SA", "2sam": "2SA",
+    "1. könige": "1KI", "1. kön": "1KI", "1kön": "1KI",
+    "2. könige": "2KI", "2. kön": "2KI", "2kön": "2KI",
+    "1. chronik": "1CH", "2. chronik": "2CH", "1chr": "1CH", "2chr": "2CH",
     "esra": "EZR", "nehemia": "NEH", "ester": "EST",
     "hiob": "JOB", "psalm": "PSA", "psalmen": "PSA",
     "sprüche": "PRO", "prediger": "ECC",
@@ -36,24 +36,24 @@ BOOK_MAPPING = {
     "johannes": "JHN", "joh": "JHN",
     "apostelgeschichte": "ACT", "apg": "ACT",
     "römer": "ROM", "röm": "ROM",
-    "1. korinther": "1CO", "1. kor": "1CO",
-    "2. korinther": "2CO", "2. kor": "2CO",
+    "1. korinther": "1CO", "1. kor": "1CO", "1kor": "1CO",
+    "2. korinther": "2CO", "2. kor": "2CO", "2kor": "2CO",
     "galater": "GAL", "gal": "GAL",
     "epheser": "EPH", "eph": "EPH",
     "philipper": "PHP", "phil": "PHP",
     "kolosser": "COL", "kol": "COL",
-    "1. thessalonicher": "1TH", "1. thess": "1TH",
-    "2. thessalonicher": "2TH", "2. thess": "2TH",
-    "1. timotheus": "1TI", "1. tim": "1TI",
-    "2. timotheus": "2TI", "2. tim": "2TI",
+    "1. thessalonicher": "1TH", "1. thess": "1TH", "1thess": "1TH",
+    "2. thessalonicher": "2TH", "2. thess": "2TH", "2thess": "2TH",
+    "1. timotheus": "1TI", "1. tim": "1TI", "1tim": "1TI",
+    "2. timotheus": "2TI", "2. tim": "2TI", "2tim": "2TI",
     "titus": "TIT", "philemon": "PHM",
     "hebräer": "HEB", "hebr": "HEB",
     "jakobus": "JAS", "jak": "JAS",
-    "1. petrus": "1PE", "1. petr": "1PE",
-    "2. petrus": "2PE", "2. petr": "2PE",
-    "1. johannes": "1JN", "1. joh": "1JN",
-    "2. johannes": "2JN", "2. joh": "2JN",
-    "3. johannes": "3JN", "3. joh": "3JN",
+    "1. petrus": "1PE", "1. petr": "1PE", "1petr": "1PE",
+    "2. petrus": "2PE", "2. petr": "2PE", "2petr": "2PE",
+    "1. johannes": "1JN", "1. joh": "1JN", "1joh": "1JN",
+    "2. johannes": "2JN", "2. joh": "2JN", "2joh": "2JN",
+    "3. johannes": "3JN", "3. joh": "3JN", "3joh": "3JN",
     "judas": "JUD",
     "offenbarung": "REV", "offb": "REV",
 }
@@ -82,7 +82,7 @@ def parse_reference(reference: str) -> list:
         part = re.sub(r'\([^)]*\)', '', part).strip()
 
         match = re.match(
-            r'^((?:\d\.\s*)?[A-Za-zäöüÄÖÜß]+)\s+'
+            r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+)\s+'
             r'(\d+)'
             r'[,.\s]\s*'
             r'(\d+)'
@@ -111,7 +111,7 @@ def parse_reference(reference: str) -> list:
 
         # Fallback: "Buch Kapitel" ohne Vers (z.B. "Psalm 133")
         match_chapter = re.match(
-            r'^((?:\d\.\s*)?[A-Za-zäöüÄÖÜß]+)\s+(\d+)\s*$',
+            r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+)\s+(\d+)\s*$',
             part
         )
         if match_chapter:

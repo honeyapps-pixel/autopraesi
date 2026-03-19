@@ -89,6 +89,10 @@ export async function generate(req: {
   overrides?: Record<string, unknown>;
   fetch_bible?: boolean;
   disabled_sections?: string[];
+  section_order?: string[];
+  text_color?: string;
+  title_layout?: { x: number; y: number; w: number; h: number; fontSize: number };
+  subtitle_layout?: { x: number; y: number; w: number; h: number; fontSize: number };
 }): Promise<GenerateResult> {
   const res = await fetch(`${API}/api/generate`, {
     method: "POST",
@@ -102,6 +106,36 @@ export async function generate(req: {
   return res.json();
 }
 
+export interface ExcelRow {
+  row: number;
+  uhrzeit: string;
+  programmpunkt: string;
+  details: string;
+}
+
+export async function getSheetRows(name: string, excelPath: string): Promise<ExcelRow[]> {
+  const params = new URLSearchParams({ excel_path: excelPath });
+  const res = await fetch(`${API}/api/sheet/${encodeURIComponent(name)}/rows?${params}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export interface SongSearchResult {
+  found: boolean;
+  file_name: string;
+  path: string;
+}
+
+export async function searchSong(raw: string): Promise<SongSearchResult> {
+  const res = await fetch(`${API}/api/search-song?raw=${encodeURIComponent(raw)}`);
+  if (!res.ok) throw new Error("Song-Suche fehlgeschlagen");
+  return res.json();
+}
+
 export function downloadUrl(filename: string): string {
   return `${API}/api/download/${encodeURIComponent(filename)}`;
+}
+
+export function imagePreviewUrl(imagePath: string): string {
+  return `${API}/api/image?path=${encodeURIComponent(imagePath)}`;
 }
