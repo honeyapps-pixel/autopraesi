@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from typing import Optional
 
 from config import SONG_LIBRARY, SONG_DIRS
 
@@ -44,7 +45,7 @@ def _normalize(text: str) -> str:
     return re.sub(r'\s+', ' ', text.strip().lower())
 
 
-def find_song(song, index: dict) -> str | None:
+def find_song(song, index: dict) -> Optional[str]:
     """Sucht ein Lied in der Bibliothek.
 
     Args:
@@ -118,7 +119,7 @@ def _get_search_dirs(song) -> list:
     return dirs
 
 
-def _search_in_dir(song, files: list) -> str | None:
+def _search_in_dir(song, files: list) -> Optional[str]:
     """Sucht ein Lied in einer Liste von Dateien."""
 
     # Strategie 1: Nach Nummer suchen (nummerierte Lieder)

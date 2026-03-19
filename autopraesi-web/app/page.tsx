@@ -26,14 +26,17 @@ import {
   InvitationEvent,
   SongSearchResult,
   getSheets,
+  getCurrentQuarter,
   getSections,
   getSheetData,
   getSheetRows,
   generate,
   uploadImage,
+  uploadExcel,
   searchSong,
   downloadUrl,
   imagePreviewUrl,
+  fetchImageAsBlob,
   ExcelRow,
   GenerateResult,
 } from "@/lib/api";
@@ -513,6 +516,7 @@ export default function Home() {
   const [overrides, setOverrides] = useState<Record<string, unknown>>({});
   const [songOverrides, setSongOverrides] = useState<Record<string, string>>({});
   const [uploadedImagePath, setUploadedImagePath] = useState<string | null>(null);
+  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [sectionToggles, setSectionToggles] = useState<Record<string, boolean>>({});
   const [eventOverrides, setEventOverrides] = useState<InvitationEvent[] | null>(null);
   const [manualExtraSongs, setManualExtraSongs] = useState<ExtraSong[]>([]);
@@ -520,6 +524,8 @@ export default function Home() {
   const [excelRows, setExcelRows] = useState<ExcelRow[]>([]);
   const [excelLoading, setExcelLoading] = useState(false);
   const [excelOpen, setExcelOpen] = useState(false);
+  const [quarterPattern, setQuarterPattern] = useState<string>("");
+  const [showAllQuarters, setShowAllQuarters] = useState(false);
   // Layout-Positionen in % der Folie (aus PowerPoint: 9144000 x 6858000 EMU)
   // Titel: left=6.9% top=2.6% w=86.2% h=31.5% fontSize=66pt
   // Subtitle: left=10.6% top=83.7% w=78.9% h=10.1% fontSize=28pt
@@ -531,8 +537,11 @@ export default function Home() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  // Load sheets + sections on mount
+  // Load sheets + sections + quarter on mount
   useEffect(() => {
+    getCurrentQuarter()
+      .then(setQuarterPattern)
+      .catch(() => {});
     getSheets()
       .then(setSheets)
       .catch((e) => setError(e.message));
@@ -557,6 +566,7 @@ export default function Home() {
       setOverrides({});
       setSongOverrides({});
       setUploadedImagePath(null);
+      setImageBlobUrl(null);
       setEventOverrides(null);
       setManualExtraSongs([]);
       setTextColor("white");
@@ -578,6 +588,13 @@ export default function Home() {
       try {
         const d = await getSheetData(sheet.name, sheet.excel_path);
         setData(d);
+
+        // Bild laden
+        if (d.image_found && d.image_path) {
+          fetchImageAsBlob(d.image_path)
+            .then(setImageBlobUrl)
+            .catch(() => setImageBlobUrl(null));
+        }
 
         // Extra-Songs aus der Excel in Sections einfügen
         const apiExtras = d.songs.filter((s) => s.slot_key.startsWith("song_extra"));
@@ -618,6 +635,8 @@ export default function Home() {
     try {
       const path = await uploadImage(file);
       setUploadedImagePath(path);
+      // Vorschau sofort mit lokalem File anzeigen
+      setImageBlobUrl(URL.createObjectURL(file));
     } catch (e) {
       setError((e as Error).message);
     }
@@ -848,23 +867,76 @@ export default function Home() {
             </p>
           </div>
         </div>
-        <select
-          className="input-field w-full text-base"
-          value={selected?.name || ""}
-          onChange={(e) => {
-            const s = sheets.find((sh) => sh.name === e.target.value);
-            if (s) loadSheet(s);
-          }}
-        >
-          <option value="" disabled>
-            Gottesdienst wählen...
-          </option>
-          {sheets.map((s) => (
-            <option key={`${s.name}-${s.excel_path}`} value={s.name}>
-              {s.name}
-            </option>
-          ))}
-        </select>
+        {(() => {
+          const filteredSheets = showAllQuarters
+            ? sheets
+            : quarterPattern
+            ? sheets.filter((s) => s.excel_path.includes(quarterPattern))
+            : sheets;
+          return (
+            <>
+              <select
+                className="input-field w-full text-base"
+                value={selected ? `${selected.name}|${selected.excel_path}` : ""}
+                onChange={(e) => {
+                  const [name, ...rest] = e.target.value.split("|");
+                  const path = rest.join("|");
+                  const s = sheets.find((sh) => sh.name === name && sh.excel_path === path);
+                  if (s) loadSheet(s);
+                }}
+              >
+                <option value="" disabled>
+                  Gottesdienst wählen...
+                </option>
+                {Object.entries(
+                  filteredSheets.reduce<Record<string, Sheet[]>>((groups, s) => {
+                    const file = s.excel_path.split("/").pop()?.replace(".xlsx", "") || s.excel_path;
+                    (groups[file] ??= []).push(s);
+                    return groups;
+                  }, {})
+                ).map(([file, group]) => (
+                  <optgroup key={file} label={file}>
+                    {group.map((s) => (
+                      <option key={`${s.name}|${s.excel_path}`} value={`${s.name}|${s.excel_path}`}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <div className="flex items-center justify-between mt-1.5">
+                <button
+                  type="button"
+                  onClick={() => setShowAllQuarters((v) => !v)}
+                  className="text-xs text-[var(--text-secondary)] hover:text-[var(--accent)] transition-colors"
+                >
+                  {showAllQuarters ? "Nur aktuelles Quartal" : "Alle Quartale anzeigen"}
+                </button>
+              </div>
+            </>
+          );
+        })()}
+        <label className="block mt-2">
+          <input
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={async (e) => {
+              const f = e.target.files?.[0];
+              if (!f) return;
+              try {
+                await uploadExcel(f);
+                const updated = await getSheets();
+                setSheets(updated);
+              } catch (err) {
+                setError((err as Error).message);
+              }
+            }}
+          />
+          <div className="text-center text-xs text-[var(--text-secondary)] cursor-pointer hover:text-[var(--accent)] transition-colors py-1">
+            Andere Excel-Tabelle hochladen (.xlsx)
+          </div>
+        </label>
       </header>
 
       {/* Mobile Excel Preview */}
@@ -1091,7 +1163,7 @@ export default function Home() {
               </h3>
 
               <SlidePreview
-                imageUrl={data.image_found && data.image_path ? imagePreviewUrl(data.image_path) : null}
+                imageUrl={imageBlobUrl}
                 theme={(overrides.theme as string) || data.theme || ""}
                 dateStr={data.date_str}
                 kirchenkalender={data.kirchenkalender}

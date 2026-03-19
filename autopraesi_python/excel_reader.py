@@ -9,6 +9,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import Optional
 
 import openpyxl
 
@@ -75,7 +76,7 @@ class GodiPlanData:
     invitation_events: list = field(default_factory=list)  # List[InvitationEvent]
 
 
-def _get_cell_color(cell) -> str | None:
+def _get_cell_color(cell) -> Optional[str]:
     """Gibt die RGB-Hintergrundfarbe einer Zelle zurück, oder None."""
     try:
         fill = cell.fill
@@ -393,7 +394,7 @@ def _ensure_dropbox_sync(excel_path: str) -> None:
     log.info("Dropbox läuft – Excel-Datei ist aktuell.")
 
 
-def find_godi_plan_excel(sunday: date) -> str | None:
+def find_godi_plan_excel(sunday: date) -> Optional[str]:
     """Findet die richtige GoDi-Plan Excel-Datei im Dropbox-Ordner."""
     sheet_name = f"So {sunday.day}.{sunday.month}"
 

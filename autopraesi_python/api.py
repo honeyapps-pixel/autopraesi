@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from dataclasses import asdict
+from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -41,7 +42,7 @@ def _get_song_index():
     return _song_index
 
 
-def _find_image(date_str: str) -> str | None:
+def _find_image(date_str: str) -> Optional[str]:
     """Sucht das Hintergrundbild ('Bild 22.03.jpg' oder '22.3.jpg')."""
     if not date_str:
         return None
@@ -85,22 +86,40 @@ class SectionInfo(BaseModel):
 class GenerateRequest(BaseModel):
     sheet_name: str
     excel_path: str
-    overrides: dict | None = None
+    overrides: Optional[dict] = None
     fetch_bible: bool = True
-    disabled_sections: list[str] | None = None  # z.B. ["glaubensbekenntnis", "kinderstunde"]
-    section_order: list[str] | None = None  # z.B. ["begruessung", "song1", ...]
+    disabled_sections: Optional[list[str]] = None  # z.B. ["glaubensbekenntnis", "kinderstunde"]
+    section_order: Optional[list[str]] = None  # z.B. ["begruessung", "song1", ...]
     text_color: str = "white"  # "white" oder "black"
-    title_layout: dict | None = None  # {x, y, w, h, fontSize} in %
-    subtitle_layout: dict | None = None
+    title_layout: Optional[dict] = None  # {x, y, w, h, fontSize} in %
+    subtitle_layout: Optional[dict] = None
 
 
 # --- Endpoints ---
+
+def _current_quarter_pattern() -> str:
+    """Gibt das Dateinamen-Muster für das aktuelle Quartal zurück."""
+    import datetime
+    now = datetime.date.today()
+    q = (now.month - 1) // 3 + 1
+    year = now.year
+    # Q1 kann als "_1" oder "_Q1" benannt sein
+    if q == 1:
+        return f"{year}_1"
+    return f"{year}_Q{q}"
+
 
 @app.get("/api/sheets", response_model=list[SheetInfo])
 def get_sheets():
     """Alle verfügbaren Sheets aus den GoDi-Plan Excel-Dateien."""
     sheets = list_all_sheets()
     return [SheetInfo(name=name, excel_path=path) for name, path in sheets]
+
+
+@app.get("/api/current-quarter")
+def get_current_quarter():
+    """Gibt das Dateinamen-Muster des aktuellen Quartals zurück."""
+    return {"pattern": _current_quarter_pattern()}
 
 
 @app.get("/api/sections", response_model=list[SectionInfo])
@@ -343,6 +362,19 @@ def download_file(filename: str):
         raise HTTPException(404, f"Datei nicht gefunden: {filename}")
     return FileResponse(path, filename=filename,
                         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+
+
+@app.post("/api/upload-excel")
+async def upload_excel(file: UploadFile = File(...)):
+    """Lädt eine Excel-Datei hoch und gibt den Pfad zurück."""
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(400, "Nur .xlsx Dateien erlaubt")
+    dest = os.path.join(GODI_PLAN_DIR, file.filename)
+    content = await file.read()
+    with open(dest, "wb") as f:
+        f.write(content)
+    log.info(f"Excel hochgeladen: {dest}")
+    return {"success": True, "path": dest, "filename": file.filename}
 
 
 @app.post("/api/refresh-songs")

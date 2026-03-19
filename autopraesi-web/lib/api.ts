@@ -1,4 +1,23 @@
-const API = process.env.NEXT_PUBLIC_API_URL || "https://demonstrate-volvo-tire-faces.trycloudflare.com";
+const API = process.env.NEXT_PUBLIC_API_URL || "https://tawniest-uxorially-boyce.ngrok-free.dev";
+
+// ngrok free zeigt eine Warnseite ohne diesen Header
+const ngrokHeaders: HeadersInit = { "ngrok-skip-browser-warning": "1" };
+
+function get(url: string): Promise<Response> {
+  return fetch(url, { headers: ngrokHeaders });
+}
+
+function postJSON(url: string, body: unknown): Promise<Response> {
+  return fetch(url, {
+    method: "POST",
+    headers: { ...ngrokHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function postForm(url: string, body: FormData): Promise<Response> {
+  return fetch(url, { method: "POST", headers: ngrokHeaders, body });
+}
 
 export interface Sheet {
   name: string;
@@ -55,21 +74,28 @@ export interface GenerateResult {
   missing_songs: string[];
 }
 
+export async function getCurrentQuarter(): Promise<string> {
+  const res = await get(`${API}/api/current-quarter`);
+  if (!res.ok) return "";
+  const data = await res.json();
+  return data.pattern || "";
+}
+
 export async function getSheets(): Promise<Sheet[]> {
-  const res = await fetch(`${API}/api/sheets`);
+  const res = await get(`${API}/api/sheets`);
   if (!res.ok) throw new Error("Sheets konnten nicht geladen werden");
   return res.json();
 }
 
 export async function getSections(): Promise<SectionInfo[]> {
-  const res = await fetch(`${API}/api/sections`);
+  const res = await get(`${API}/api/sections`);
   if (!res.ok) throw new Error("Sections konnten nicht geladen werden");
   return res.json();
 }
 
 export async function getSheetData(name: string, excelPath: string): Promise<SheetData> {
   const params = new URLSearchParams({ excel_path: excelPath });
-  const res = await fetch(`${API}/api/sheet/${encodeURIComponent(name)}?${params}`);
+  const res = await get(`${API}/api/sheet/${encodeURIComponent(name)}?${params}`);
   if (!res.ok) throw new Error(`Sheet '${name}' konnte nicht geladen werden`);
   return res.json();
 }
@@ -77,7 +103,7 @@ export async function getSheetData(name: string, excelPath: string): Promise<She
 export async function uploadImage(file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API}/api/upload-image`, { method: "POST", body: form });
+  const res = await postForm(`${API}/api/upload-image`, form);
   if (!res.ok) throw new Error("Bild-Upload fehlgeschlagen");
   const data = await res.json();
   return data.path;
@@ -94,11 +120,7 @@ export async function generate(req: {
   title_layout?: { x: number; y: number; w: number; h: number; fontSize: number };
   subtitle_layout?: { x: number; y: number; w: number; h: number; fontSize: number };
 }): Promise<GenerateResult> {
-  const res = await fetch(`${API}/api/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  const res = await postJSON(`${API}/api/generate`, req);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Unbekannter Fehler" }));
     throw new Error(err.detail || "Generierung fehlgeschlagen");
@@ -115,7 +137,7 @@ export interface ExcelRow {
 
 export async function getSheetRows(name: string, excelPath: string): Promise<ExcelRow[]> {
   const params = new URLSearchParams({ excel_path: excelPath });
-  const res = await fetch(`${API}/api/sheet/${encodeURIComponent(name)}/rows?${params}`);
+  const res = await get(`${API}/api/sheet/${encodeURIComponent(name)}/rows?${params}`);
   if (!res.ok) return [];
   return res.json();
 }
@@ -127,7 +149,7 @@ export interface SongSearchResult {
 }
 
 export async function searchSong(raw: string): Promise<SongSearchResult> {
-  const res = await fetch(`${API}/api/search-song?raw=${encodeURIComponent(raw)}`);
+  const res = await get(`${API}/api/search-song?raw=${encodeURIComponent(raw)}`);
   if (!res.ok) throw new Error("Song-Suche fehlgeschlagen");
   return res.json();
 }
@@ -138,4 +160,19 @@ export function downloadUrl(filename: string): string {
 
 export function imagePreviewUrl(imagePath: string): string {
   return `${API}/api/image?path=${encodeURIComponent(imagePath)}`;
+}
+
+export async function fetchImageAsBlob(imagePath: string): Promise<string> {
+  const res = await get(`${API}/api/image?path=${encodeURIComponent(imagePath)}`);
+  if (!res.ok) throw new Error("Bild konnte nicht geladen werden");
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function uploadExcel(file: File): Promise<{ path: string; filename: string }> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await postForm(`${API}/api/upload-excel`, form);
+  if (!res.ok) throw new Error("Excel-Upload fehlgeschlagen");
+  return res.json();
 }
