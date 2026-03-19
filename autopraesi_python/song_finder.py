@@ -1,4 +1,5 @@
 """Sucht Lieder in der Brüderrecords-Bibliothek."""
+from __future__ import annotations
 
 import logging
 import os

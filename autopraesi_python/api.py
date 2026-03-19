@@ -1,4 +1,5 @@
 """AutoPräsi API – FastAPI Backend für die Web-UI."""
+from __future__ import annotations
 
 import logging
 import os
