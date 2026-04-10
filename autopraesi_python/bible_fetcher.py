@@ -61,6 +61,23 @@ BOOK_MAPPING = {
 BIBLE_URL = "https://www.die-bibel.de/bibel/LU84/{book}.{chapter}"
 
 
+def _lookup_book(book_de: str):
+    """Schlägt ein Buch im Mapping nach, normalisiert '1 petrus' → '1. petrus' etc."""
+    book_abbr = BOOK_MAPPING.get(book_de)
+    if book_abbr:
+        return book_abbr
+    # Versuch mit Punkt nach Ziffer: "1 petrus" → "1. petrus"
+    normalized = re.sub(r'^(\d)\s+', r'\1. ', book_de)
+    book_abbr = BOOK_MAPPING.get(normalized)
+    if book_abbr:
+        return book_abbr
+    # Fuzzy: Prefix-Match
+    for key, val in BOOK_MAPPING.items():
+        if book_de.startswith(key) or key.startswith(book_de):
+            return val
+    return None
+
+
 def parse_reference(reference: str) -> list:
     """Parst eine deutsche Bibelstellen-Referenz.
 
@@ -96,12 +113,7 @@ def parse_reference(reference: str) -> list:
             verse_start = int(match.group(3))
             verse_end = int(match.group(4)) if match.group(4) else verse_start
 
-            book_abbr = BOOK_MAPPING.get(book_de)
-            if not book_abbr:
-                for key, val in BOOK_MAPPING.items():
-                    if book_de.startswith(key) or key.startswith(book_de):
-                        book_abbr = val
-                        break
+            book_abbr = _lookup_book(book_de)
 
             if book_abbr:
                 results.append((book_abbr, chapter, verse_start, verse_end))
@@ -118,12 +130,7 @@ def parse_reference(reference: str) -> list:
             book_de = match_chapter.group(1).strip().lower()
             chapter = int(match_chapter.group(2))
 
-            book_abbr = BOOK_MAPPING.get(book_de)
-            if not book_abbr:
-                for key, val in BOOK_MAPPING.items():
-                    if book_de.startswith(key) or key.startswith(book_de):
-                        book_abbr = val
-                        break
+            book_abbr = _lookup_book(book_de)
 
             if book_abbr:
                 log.info(f"Ganzes Kapitel wird geladen: {book_de} {chapter}")

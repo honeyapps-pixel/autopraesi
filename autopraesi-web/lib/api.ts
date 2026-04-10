@@ -1,22 +1,22 @@
-const API = process.env.NEXT_PUBLIC_API_URL || "https://tawniest-uxorially-boyce.ngrok-free.dev";
-
-// ngrok free zeigt eine Warnseite ohne diesen Header
-const ngrokHeaders: HeadersInit = { "ngrok-skip-browser-warning": "1" };
+// API-Requests gehen über den eigenen Vercel-Proxy (/api/...),
+// der serverseitig an das ngrok-Backend weiterleitet.
+// So gibt es keine CORS-/ngrok-Interstitial-Probleme auf fremden Geräten.
+const API = "";
 
 function get(url: string): Promise<Response> {
-  return fetch(url, { headers: ngrokHeaders });
+  return fetch(url);
 }
 
 function postJSON(url: string, body: unknown): Promise<Response> {
   return fetch(url, {
     method: "POST",
-    headers: { ...ngrokHeaders, "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
 
 function postForm(url: string, body: FormData): Promise<Response> {
-  return fetch(url, { method: "POST", headers: ngrokHeaders, body });
+  return fetch(url, { method: "POST", body });
 }
 
 export interface Sheet {

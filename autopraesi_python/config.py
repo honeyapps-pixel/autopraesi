@@ -5,7 +5,7 @@ import os
 # Basis-Pfade
 HOME = os.path.expanduser("~")
 DROPBOX_GEMEINDE = os.path.join(HOME, "Dropbox", "Gemeinde")
-DESKTOP_AUTOPRAESI = os.path.join(HOME, "Desktop", "Autopräsi")
+DESKTOP_AUTOPRAESI = os.path.join(HOME, "Desktop", "Projekte", "Autopräsi")
 
 # Template
 TEMPLATE_PATH = os.path.join(
