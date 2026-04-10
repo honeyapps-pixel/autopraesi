@@ -119,6 +119,10 @@ export async function generate(req: {
   text_color?: string;
   title_layout?: { x: number; y: number; w: number; h: number; fontSize: number };
   subtitle_layout?: { x: number; y: number; w: number; h: number; fontSize: number };
+  image_filter?: string;
+  text_banner?: string;
+  shadow_strength?: string;
+  text_outline?: boolean;
 }): Promise<GenerateResult> {
   const res = await postJSON(`${API}/api/generate`, req);
   if (!res.ok) {

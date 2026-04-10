@@ -66,7 +66,10 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
                        fetch_bible: bool = True, output_name: str = None,
                        skip_slides: set = None, section_order: list = None,
                        extra_songs: dict = None, text_color: str = "white",
-                       title_layout: dict = None, subtitle_layout: dict = None) -> str:
+                       title_layout: dict = None, subtitle_layout: dict = None,
+                       image_filter: str = "none", text_banner: str = "none",
+                       shadow_strength: str = "normal",
+                       text_outline: bool = False) -> str:
     """Erstellt die komplette Gottesdienst-Präsentation.
 
     Args:
@@ -108,6 +111,10 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     if image_path and os.path.exists(image_path):
         _set_theme_image(prs, image_path)
 
+    # === Phase 3b: Bildfilter-Overlay auf Thema-Folien ===
+    if image_filter != "none":
+        _apply_image_filter(prs, image_filter)
+
     # === Phase 4: Texte ersetzen ===
     _fill_all_text(prs, data, fetch_bible, template_indices)
 
@@ -118,6 +125,14 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     # === Phase 4c: Text-Layout auf Thema-Folien anpassen ===
     if title_layout or subtitle_layout:
         _apply_theme_text_layout(prs, title_layout, subtitle_layout)
+
+    # === Phase 4d: Text-Hintergrund (Banner) auf Thema-Folien ===
+    if text_banner != "none":
+        _apply_text_banner(prs, text_banner)
+
+    # === Phase 4e: Text-Effekte (Schatten/Kontur) auf Thema-Folien ===
+    if shadow_strength != "normal" or text_outline:
+        _apply_text_effects(prs, shadow_strength, text_outline)
 
     # === Phase 5: Speichern ===
     prs.save(output_path)
@@ -283,6 +298,249 @@ def _apply_theme_text_layout(prs, title_layout: dict = None, subtitle_layout: di
                     bodyPr.set('anchor', 'ctr')
 
     log.info("Theme-Text-Layout angepasst")
+
+
+def _get_next_shape_id(slide):
+    """Gibt die nächste freie Shape-ID für eine Folie zurück."""
+    max_id = 0
+    for sp in slide._element.findall('.//' + qn('p:cNvPr')):
+        try:
+            sid = int(sp.get('id', 0))
+            if sid > max_id:
+                max_id = sid
+        except ValueError:
+            pass
+    # Auch in normalen Shapes suchen
+    for sp in slide._element.findall('.//' + qn('a:cNvPr')):
+        # Fallback: manchmal unter anderem Namespace
+        pass
+    return max_id + 1
+
+
+def _apply_image_filter(prs, image_filter: str):
+    """Fügt ein halbtransparentes Overlay-Rechteck auf Thema-Folien ein.
+
+    Das Rechteck wird zwischen Hintergrundbild und Text-Shapes platziert.
+    """
+    p_ns = 'http://schemas.openxmlformats.org/presentationml/2006/main'
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    r_ns = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+
+    slide_w = prs.slide_width
+    slide_h = prs.slide_height
+
+    # Filter-Konfiguration
+    filter_configs = {
+        "dark-10":  ("solid", "000000", 10000),
+        "dark-20":  ("solid", "000000", 20000),
+        "dark-30":  ("solid", "000000", 30000),
+        "dark-50":  ("solid", "000000", 50000),
+        "dark-70":  ("solid", "000000", 70000),
+        "light-30": ("solid", "FFFFFF", 30000),
+        "light-50": ("solid", "FFFFFF", 50000),
+        "gradient-bottom": ("gradient", "000000", 70000, 16200000),  # unten→oben
+        "gradient-top":    ("gradient", "000000", 70000, 5400000),   # oben→unten
+    }
+
+    config = filter_configs.get(image_filter)
+    if not config:
+        return
+
+    count = 0
+    for slide in prs.slides:
+        slide_text = _get_slide_text(slide)
+        if "Gottesdienst am" not in slide_text:
+            continue
+
+        next_id = _get_next_shape_id(slide)
+
+        # Fill-XML aufbauen
+        if config[0] == "solid":
+            _, color, alpha = config
+            fill_xml = (
+                f'<a:solidFill xmlns:a="{a_ns}">'
+                f'<a:srgbClr val="{color}"><a:alpha val="{alpha}"/></a:srgbClr>'
+                f'</a:solidFill>'
+            )
+        else:  # gradient
+            _, color, alpha, angle = config
+            fill_xml = (
+                f'<a:gradFill xmlns:a="{a_ns}">'
+                f'<a:gsLst>'
+                f'<a:gs pos="0"><a:srgbClr val="{color}"><a:alpha val="{alpha}"/></a:srgbClr></a:gs>'
+                f'<a:gs pos="100000"><a:srgbClr val="{color}"><a:alpha val="0"/></a:srgbClr></a:gs>'
+                f'</a:gsLst>'
+                f'<a:lin ang="{angle}" scaled="1"/>'
+                f'</a:gradFill>'
+            )
+
+        overlay_xml = (
+            f'<p:sp xmlns:p="{p_ns}" xmlns:a="{a_ns}" xmlns:r="{r_ns}">'
+            f'<p:nvSpPr>'
+            f'<p:cNvPr id="{next_id}" name="OverlayFilter"/>'
+            f'<p:cNvSpPr/><p:nvPr/>'
+            f'</p:nvSpPr>'
+            f'<p:spPr>'
+            f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{slide_w}" cy="{slide_h}"/></a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+            f'{fill_xml}'
+            f'<a:ln><a:noFill/></a:ln>'
+            f'</p:spPr>'
+            f'</p:sp>'
+        )
+
+        overlay_elem = etree.fromstring(overlay_xml)
+
+        # In spTree einfügen: nach Bild-Shapes, vor Text-Shapes
+        spTree = slide._element.find(qn('p:cSld')).find(qn('p:spTree'))
+        children = list(spTree)
+
+        # Finde die Position des letzten pic-Elements (Bild)
+        insert_idx = 2  # nach nvGrpSpPr und grpSpPr
+        for i, child in enumerate(children):
+            if child.tag == qn('p:pic'):
+                insert_idx = i + 1
+
+        spTree.insert(insert_idx, overlay_elem)
+        count += 1
+
+    log.info(f"Bildfilter '{image_filter}' auf {count} Thema-Folien angewendet")
+
+
+def _apply_text_banner(prs, text_banner: str):
+    """Setzt einen halbtransparenten Hintergrund auf Text-Shapes der Thema-Folien."""
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+
+    banner_alpha = {
+        "subtle": 20000,
+        "medium": 40000,
+        "strong": 60000,
+    }
+    alpha = banner_alpha.get(text_banner)
+    if not alpha:
+        return
+
+    count = 0
+    for slide in prs.slides:
+        slide_text = _get_slide_text(slide)
+        if "Gottesdienst am" not in slide_text:
+            continue
+
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            # Nur Titel und Untertitel (Text-Shapes auf Thema-Folien)
+            if shape.name not in ("Titel 1", "CustomShape 1"):
+                # Fallback: nach Position
+                slide_h = prs.slide_height
+                if not (shape.top < slide_h * 0.4 and shape.height > slide_h * 0.15) \
+                   and not (shape.top > slide_h * 0.6):
+                    continue
+
+            spPr = shape._element.find(qn('p:spPr'))
+            if spPr is None:
+                continue
+
+            # Bestehende Füllung entfernen
+            for old_fill in spPr.findall(qn('a:solidFill')):
+                spPr.remove(old_fill)
+            for old_fill in spPr.findall(qn('a:noFill')):
+                spPr.remove(old_fill)
+
+            # Neue halbtransparente Füllung setzen
+            fill_xml = (
+                f'<a:solidFill xmlns:a="{a_ns}">'
+                f'<a:srgbClr val="000000"><a:alpha val="{alpha}"/></a:srgbClr>'
+                f'</a:solidFill>'
+            )
+            fill_elem = etree.fromstring(fill_xml)
+
+            # solidFill nach xfrm und prstGeom einfügen
+            xfrm = spPr.find(qn('a:xfrm'))
+            prstGeom = spPr.find(qn('a:prstGeom'))
+            if prstGeom is not None:
+                idx = list(spPr).index(prstGeom) + 1
+            elif xfrm is not None:
+                idx = list(spPr).index(xfrm) + 1
+            else:
+                idx = 0
+            spPr.insert(idx, fill_elem)
+
+        count += 1
+
+    log.info(f"Text-Banner '{text_banner}' auf {count} Thema-Folien angewendet")
+
+
+def _apply_text_effects(prs, shadow_strength: str = "normal", text_outline: bool = False):
+    """Passt Schatten und Kontur auf Text-Runs der Thema-Folien an."""
+    a_ns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    count = 0
+
+    for slide in prs.slides:
+        slide_text = _get_slide_text(slide)
+        if "Gottesdienst am" not in slide_text:
+            continue
+
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            for para in shape.text_frame.paragraphs:
+                for run in para.runs:
+                    rPr = run._r.find(qn('a:rPr'))
+                    if rPr is None:
+                        continue
+
+                    # Stärkerer Schatten
+                    if shadow_strength == "strong":
+                        effectLst = rPr.find(qn('a:effectLst'))
+                        if effectLst is not None:
+                            rPr.remove(effectLst)
+                        strong_effect_xml = (
+                            f'<a:effectLst xmlns:a="{a_ns}">'
+                            f'<a:outerShdw blurRad="101600" dist="50800" dir="2700000"'
+                            f' algn="tl" rotWithShape="0">'
+                            f'<a:srgbClr val="000000"><a:alpha val="90000"/></a:srgbClr>'
+                            f'</a:outerShdw>'
+                            f'</a:effectLst>'
+                        )
+                        effect_elem = etree.fromstring(strong_effect_xml)
+                        # effectLst nach solidFill einfügen
+                        solidFill = rPr.find(qn('a:solidFill'))
+                        if solidFill is not None:
+                            idx = list(rPr).index(solidFill) + 1
+                            rPr.insert(idx, effect_elem)
+                        else:
+                            rPr.append(effect_elem)
+
+                    # Text-Kontur
+                    if text_outline:
+                        old_ln = rPr.find(qn('a:ln'))
+                        if old_ln is not None:
+                            rPr.remove(old_ln)
+
+                        # Konturfarbe: invers zur Textfarbe
+                        text_fill = rPr.find(qn('a:solidFill'))
+                        outline_color = "000000"  # Standard: schwarz
+                        if text_fill is not None:
+                            srgb = text_fill.find(qn('a:srgbClr'))
+                            if srgb is not None and srgb.get('val', '').upper() == '000000':
+                                outline_color = "FFFFFF"
+                            prst = text_fill.find(qn('a:prstClr'))
+                            if prst is not None and prst.get('val') == 'black':
+                                outline_color = "FFFFFF"
+
+                        ln_xml = (
+                            f'<a:ln xmlns:a="{a_ns}" w="12700">'
+                            f'<a:solidFill><a:srgbClr val="{outline_color}"/></a:solidFill>'
+                            f'</a:ln>'
+                        )
+                        ln_elem = etree.fromstring(ln_xml)
+                        # ln als erstes Kind von rPr einfügen
+                        rPr.insert(0, ln_elem)
+
+        count += 1
+
+    log.info(f"Text-Effekte (shadow={shadow_strength}, outline={text_outline}) auf {count} Thema-Folien")
 
 
 def _build_slide_plan(song_paths: dict, skip_slides: set = None,

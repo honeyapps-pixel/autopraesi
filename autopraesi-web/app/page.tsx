@@ -49,6 +49,7 @@ interface TextLayout {
 // --- Draggable Slide Text Element ---
 function DraggableText({
   text, layout, color, italic, onLayoutChange, containerRef,
+  textBanner, shadowStrength, textOutline,
 }: {
   text: string;
   layout: TextLayout;
@@ -56,6 +57,9 @@ function DraggableText({
   italic?: boolean;
   onLayoutChange: (l: TextLayout) => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  textBanner?: string;
+  shadowStrength?: string;
+  textOutline?: boolean;
 }) {
   const dragStart = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
 
@@ -81,9 +85,17 @@ function DraggableText({
 
   const handlePointerUp = () => { dragStart.current = null; };
 
+  const isStrong = shadowStrength === "strong";
   const shadow = color === "white"
-    ? "0 2px 6px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.3)"
-    : "0 2px 6px rgba(255,255,255,0.6), 0 0 20px rgba(255,255,255,0.2)";
+    ? isStrong
+      ? "0 2px 8px rgba(0,0,0,1), 0 0 30px rgba(0,0,0,0.6), 0 0 60px rgba(0,0,0,0.3)"
+      : "0 2px 6px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.3)"
+    : isStrong
+      ? "0 2px 8px rgba(255,255,255,1), 0 0 30px rgba(255,255,255,0.6), 0 0 60px rgba(255,255,255,0.3)"
+      : "0 2px 6px rgba(255,255,255,0.6), 0 0 20px rgba(255,255,255,0.2)";
+
+  const bannerOpacity = textBanner === "subtle" ? 0.2 : textBanner === "medium" ? 0.4 : textBanner === "strong" ? 0.6 : 0;
+  const outlineColor = color === "white" ? "black" : "white";
 
   return (
     <div
@@ -99,6 +111,15 @@ function DraggableText({
         display: "flex", alignItems: "center", justifyContent: "center",
         textAlign: "center",
         touchAction: "none",
+        ...(bannerOpacity > 0 && {
+          background: `rgba(0,0,0,${bannerOpacity})`,
+          padding: "0.5em 0.8em",
+          borderRadius: "0.3em",
+        }),
+        ...(textOutline && {
+          WebkitTextStroke: `1px ${outlineColor}`,
+          paintOrder: "stroke fill",
+        }),
       }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -110,9 +131,25 @@ function DraggableText({
 }
 
 // --- Slide Preview ---
+function getFilterStyle(filter: string): React.CSSProperties {
+  switch (filter) {
+    case "dark-10": return { background: "rgba(0,0,0,0.1)" };
+    case "dark-20": return { background: "rgba(0,0,0,0.2)" };
+    case "dark-30": return { background: "rgba(0,0,0,0.3)" };
+    case "dark-50": return { background: "rgba(0,0,0,0.5)" };
+    case "dark-70": return { background: "rgba(0,0,0,0.7)" };
+    case "light-30": return { background: "rgba(255,255,255,0.3)" };
+    case "light-50": return { background: "rgba(255,255,255,0.5)" };
+    case "gradient-bottom": return { background: "linear-gradient(to top, rgba(0,0,0,0.7), transparent)" };
+    case "gradient-top": return { background: "linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)" };
+    default: return {};
+  }
+}
+
 function SlidePreview({
   imageUrl, theme, dateStr, kirchenkalender, textColor,
   titleLayout, subtitleLayout, onTitleLayoutChange, onSubtitleLayoutChange,
+  imageFilter, textBanner, shadowStrength, textOutline,
 }: {
   imageUrl: string | null;
   theme: string;
@@ -123,6 +160,10 @@ function SlidePreview({
   subtitleLayout: TextLayout;
   onTitleLayoutChange: (l: TextLayout) => void;
   onSubtitleLayoutChange: (l: TextLayout) => void;
+  imageFilter: string;
+  textBanner: string;
+  shadowStrength: string;
+  textOutline: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -142,6 +183,9 @@ function SlidePreview({
       style={{ aspectRatio: "4 / 3", containerType: "inline-size" }}
     >
       <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" draggable={false} />
+      {imageFilter !== "none" && (
+        <div className="absolute inset-0 pointer-events-none" style={getFilterStyle(imageFilter)} />
+      )}
       <DraggableText
         text={theme || "Thema"}
         layout={titleLayout}
@@ -149,6 +193,9 @@ function SlidePreview({
         italic
         onLayoutChange={onTitleLayoutChange}
         containerRef={containerRef}
+        textBanner={textBanner}
+        shadowStrength={shadowStrength}
+        textOutline={textOutline}
       />
       <DraggableText
         text={`Gottesdienst am ${dateStr}, ${kirchenkalender}`}
@@ -156,6 +203,9 @@ function SlidePreview({
         color={textColor}
         onLayoutChange={onSubtitleLayoutChange}
         containerRef={containerRef}
+        textBanner={textBanner}
+        shadowStrength={shadowStrength}
+        textOutline={textOutline}
       />
     </div>
   );
@@ -521,6 +571,10 @@ export default function Home() {
   const [eventOverrides, setEventOverrides] = useState<InvitationEvent[] | null>(null);
   const [manualExtraSongs, setManualExtraSongs] = useState<ExtraSong[]>([]);
   const [textColor, setTextColor] = useState<"white" | "black">("white");
+  const [imageFilter, setImageFilter] = useState("none");
+  const [textBanner, setTextBanner] = useState("none");
+  const [shadowStrength, setShadowStrength] = useState("normal");
+  const [textOutline, setTextOutline] = useState(false);
   const [excelRows, setExcelRows] = useState<ExcelRow[]>([]);
   const [excelLoading, setExcelLoading] = useState(false);
   const [excelOpen, setExcelOpen] = useState(false);
@@ -570,6 +624,10 @@ export default function Home() {
       setEventOverrides(null);
       setManualExtraSongs([]);
       setTextColor("white");
+      setImageFilter("none");
+      setTextBanner("none");
+      setShadowStrength("normal");
+      setTextOutline(false);
       setTitleLayout({ x: 6.9, y: 2.6, w: 86.2, h: 31.5, fontSize: 6.6 });
       setSubtitleLayout({ x: 10.6, y: 83.7, w: 78.9, h: 10.1, fontSize: 2.8 });
       setExcelRows([]);
@@ -764,6 +822,10 @@ export default function Home() {
         text_color: textColor,
         title_layout: titleLayout,
         subtitle_layout: subtitleLayout,
+        image_filter: imageFilter,
+        text_banner: textBanner,
+        shadow_strength: shadowStrength,
+        text_outline: textOutline,
       });
       setResult(res);
     } catch (e) {
@@ -1172,6 +1234,10 @@ export default function Home() {
                 subtitleLayout={subtitleLayout}
                 onTitleLayoutChange={setTitleLayout}
                 onSubtitleLayoutChange={setSubtitleLayout}
+                imageFilter={imageFilter}
+                textBanner={textBanner}
+                shadowStrength={shadowStrength}
+                textOutline={textOutline}
               />
 
               {/* Controls */}
@@ -1207,6 +1273,70 @@ export default function Home() {
                   <span className="text-xs text-[var(--text-secondary)] w-6 text-center">{subtitleLayout.fontSize.toFixed(1)}</span>
                   <button type="button" onClick={() => setSubtitleLayout(l => ({...l, fontSize: Math.min(6, l.fontSize + 0.25)}))} className="text-xs px-1.5 py-0.5 rounded bg-gray-100 hover:bg-gray-200">A+</button>
                 </div>
+              </div>
+
+              {/* Zeile 2: Filter, Textbox, Schatten, Kontur */}
+              <div className="flex items-center gap-4 mt-2 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[var(--text-secondary)]">Filter:</span>
+                  <select
+                    value={imageFilter}
+                    onChange={(e) => setImageFilter(e.target.value)}
+                    className="text-xs px-1.5 py-1 rounded bg-gray-100 hover:bg-gray-200 border-none outline-none cursor-pointer"
+                  >
+                    <option value="none">Kein Filter</option>
+                    <option value="dark-10">Dunkel 10%</option>
+                    <option value="dark-20">Dunkel 20%</option>
+                    <option value="dark-30">Dunkel 30%</option>
+                    <option value="dark-50">Dunkel 50%</option>
+                    <option value="dark-70">Dunkel 70%</option>
+                    <option value="light-30">Hell 30%</option>
+                    <option value="light-50">Hell 50%</option>
+                    <option value="gradient-bottom">Verlauf unten</option>
+                    <option value="gradient-top">Verlauf oben</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-[var(--text-secondary)]">Textbox:</span>
+                  {(["none", "subtle", "medium", "strong"] as const).map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => setTextBanner(val)}
+                      className={`w-6 h-6 rounded border-2 transition-all ${
+                        textBanner === val ? "border-[var(--accent)] scale-110 shadow-md" : "border-gray-300"
+                      }`}
+                      style={{ background: val === "none" ? "transparent" : `rgba(0,0,0,${val === "subtle" ? 0.2 : val === "medium" ? 0.4 : 0.6})` }}
+                      title={val === "none" ? "Aus" : val === "subtle" ? "Dezent" : val === "medium" ? "Mittel" : "Stark"}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-[var(--text-secondary)]">Schatten:</span>
+                  <button
+                    type="button"
+                    onClick={() => setShadowStrength("normal")}
+                    className={`text-xs px-1.5 py-0.5 rounded transition-all ${
+                      shadowStrength === "normal" ? "bg-[var(--accent)] text-white" : "bg-gray-100 hover:bg-gray-200"
+                    }`}
+                  >Normal</button>
+                  <button
+                    type="button"
+                    onClick={() => setShadowStrength("strong")}
+                    className={`text-xs px-1.5 py-0.5 rounded transition-all ${
+                      shadowStrength === "strong" ? "bg-[var(--accent)] text-white" : "bg-gray-100 hover:bg-gray-200"
+                    }`}
+                  >Stark</button>
+                </div>
+                <label className="flex items-center gap-1 cursor-pointer">
+                  <span className="text-xs text-[var(--text-secondary)]">Kontur:</span>
+                  <input
+                    type="checkbox"
+                    checked={textOutline}
+                    onChange={(e) => setTextOutline(e.target.checked)}
+                    className="w-3.5 h-3.5 rounded accent-[var(--accent)]"
+                  />
+                </label>
               </div>
 
               {/* Bild Upload */}

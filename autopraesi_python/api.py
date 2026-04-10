@@ -93,6 +93,10 @@ class GenerateRequest(BaseModel):
     text_color: str = "white"  # "white" oder "black"
     title_layout: Optional[dict] = None  # {x, y, w, h, fontSize} in %
     subtitle_layout: Optional[dict] = None
+    image_filter: str = "none"  # "none", "dark-30", "dark-50", "dark-70", "light-30", "light-50", "gradient-bottom", "gradient-top"
+    text_banner: str = "none"  # "none", "subtle", "medium", "strong"
+    shadow_strength: str = "normal"  # "normal", "strong"
+    text_outline: bool = False
 
 
 # --- Endpoints ---
@@ -341,6 +345,10 @@ def generate_presentation(req: GenerateRequest):
             text_color=req.text_color,
             title_layout=req.title_layout,
             subtitle_layout=req.subtitle_layout,
+            image_filter=req.image_filter,
+            text_banner=req.text_banner,
+            shadow_strength=req.shadow_strength,
+            text_outline=req.text_outline,
         )
     except Exception as e:
         log.error(f"Fehler beim Generieren: {e}", exc_info=True)
