@@ -63,11 +63,12 @@ BIBLE_URL = "https://www.die-bibel.de/bibel/LU84/{book}.{chapter}"
 
 def _lookup_book(book_de: str):
     """Schlägt ein Buch im Mapping nach, normalisiert '1 petrus' → '1. petrus' etc."""
+    book_de = book_de.rstrip(".").strip()
     book_abbr = BOOK_MAPPING.get(book_de)
     if book_abbr:
         return book_abbr
     # Versuch mit Punkt nach Ziffer: "1 petrus" → "1. petrus"
-    normalized = re.sub(r'^(\d)\s+', r'\1. ', book_de)
+    normalized = re.sub(r'^(\d)\s*', r'\1. ', book_de)
     book_abbr = BOOK_MAPPING.get(normalized)
     if book_abbr:
         return book_abbr
@@ -76,6 +77,11 @@ def _lookup_book(book_de: str):
         if book_de.startswith(key) or key.startswith(book_de):
             return val
     return None
+
+
+# Alle Strich-Varianten, die als Vers-Trenner vorkommen können
+# (Hyphen, En-Dash, Em-Dash, Figure-Dash, Minus-Sign, Horizontal-Bar)
+_DASH_CHARS = "-‐‑‒–—―−"
 
 
 def parse_reference(reference: str) -> list:
@@ -99,11 +105,11 @@ def parse_reference(reference: str) -> list:
         part = re.sub(r'\([^)]*\)', '', part).strip()
 
         match = re.match(
-            r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+)\s+'
+            r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+\.?)\s+'
             r'(\d+)'
             r'[,.\s]\s*'
             r'(\d+)'
-            r'(?:\s*[–\-]\s*(\d+))?',
+            rf'(?:\s*[{_DASH_CHARS}]\s*(\d+))?',
             part
         )
 
@@ -123,7 +129,7 @@ def parse_reference(reference: str) -> list:
 
         # Fallback: "Buch Kapitel" ohne Vers (z.B. "Psalm 133")
         match_chapter = re.match(
-            r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+)\s+(\d+)\s*$',
+            r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+\.?)\s+(\d+)\s*$',
             part
         )
         if match_chapter:

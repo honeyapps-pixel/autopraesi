@@ -385,6 +385,9 @@ interface ExtraSong {
   result: SongSearchResult | null;
 }
 
+// Event-Zeile mit stabiler ID (id wird nicht ans Backend gesendet).
+type EventRow = InvitationEvent & { id: string };
+
 // --- Song Slot Label ---
 function songLabel(slot: string): string {
   if (slot.startsWith("song_extra")) return `+${slot.replace("song_extra", "")}`;
@@ -568,7 +571,11 @@ export default function Home() {
   const [uploadedImagePath, setUploadedImagePath] = useState<string | null>(null);
   const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null);
   const [sectionToggles, setSectionToggles] = useState<Record<string, boolean>>({});
-  const [eventOverrides, setEventOverrides] = useState<InvitationEvent[] | null>(null);
+  // Events lokal als Zeilen mit stabiler ID, damit das Bearbeiten einer Zeile
+  // nicht mit anderen Zeilen kollidiert (React keyed reconciliation).
+  const [eventRows, setEventRows] = useState<EventRow[]>([]);
+  const [eventsTouched, setEventsTouched] = useState(false);
+  const eventIdCounter = useRef(0);
   const [manualExtraSongs, setManualExtraSongs] = useState<ExtraSong[]>([]);
   const [textColor, setTextColor] = useState<"white" | "black">("white");
   const [imageFilter, setImageFilter] = useState("none");
@@ -621,7 +628,8 @@ export default function Home() {
       setSongOverrides({});
       setUploadedImagePath(null);
       setImageBlobUrl(null);
-      setEventOverrides(null);
+      setEventRows([]);
+      setEventsTouched(false);
       setManualExtraSongs([]);
       setTextColor("white");
       setImageFilter("none");
@@ -646,6 +654,14 @@ export default function Home() {
       try {
         const d = await getSheetData(sheet.name, sheet.excel_path);
         setData(d);
+
+        // Events mit stabilen IDs initialisieren
+        setEventRows(
+          d.invitation_events.map((e) => {
+            eventIdCounter.current += 1;
+            return { ...e, id: `evt-${eventIdCounter.current}` };
+          })
+        );
 
         // Bild laden
         if (d.image_found && d.image_path) {
@@ -700,23 +716,25 @@ export default function Home() {
     }
   };
 
-  const getEvents = (): InvitationEvent[] =>
-    eventOverrides || data?.invitation_events || [];
-
-  const updateEvent = (index: number, field: keyof InvitationEvent, value: string) => {
-    const current = [...getEvents()];
-    current[index] = { ...current[index], [field]: value };
-    setEventOverrides(current);
+  const updateEvent = (id: string, field: keyof InvitationEvent, value: string) => {
+    setEventsTouched(true);
+    setEventRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, [field]: value } : r))
+    );
   };
 
   const addEvent = () => {
-    setEventOverrides([...getEvents(), { date_str: "", time_str: "", event_name: "", note: "" }]);
+    eventIdCounter.current += 1;
+    setEventsTouched(true);
+    setEventRows((prev) => [
+      ...prev,
+      { id: `evt-${eventIdCounter.current}`, date_str: "", time_str: "", event_name: "", note: "" },
+    ]);
   };
 
-  const removeEvent = (index: number) => {
-    const current = [...getEvents()];
-    current.splice(index, 1);
-    setEventOverrides(current);
+  const removeEvent = (id: string) => {
+    setEventsTouched(true);
+    setEventRows((prev) => prev.filter((r) => r.id !== id));
   };
 
   const addManualSong = () => {
@@ -803,8 +821,9 @@ export default function Home() {
     if (uploadedImagePath) {
       finalOverrides.image_path = uploadedImagePath;
     }
-    if (eventOverrides) {
-      finalOverrides.invitation_events = eventOverrides;
+    if (eventsTouched) {
+      // ID strippen – das Backend kennt nur die InvitationEvent-Felder
+      finalOverrides.invitation_events = eventRows.map(({ id: _id, ...rest }) => rest);
     }
 
     const disabledSections = Object.entries(sectionToggles)
@@ -1172,35 +1191,39 @@ export default function Home() {
                 <span className="w-7" />
               </div>
               <div className="space-y-1">
-                {getEvents().map((evt, i) => (
-                  <div key={i} className="grid grid-cols-[0.9fr_0.5fr_1.5fr_1fr_auto] gap-2 items-center">
+                {eventRows.map((row) => (
+                  <div key={row.id} className="grid grid-cols-[0.9fr_0.5fr_1.5fr_1fr_auto] gap-2 items-center">
                     <input
                       className="input-field text-sm"
-                      value={evt.date_str}
+                      defaultValue={row.date_str}
                       placeholder="Di 17.03.26"
-                      onChange={(e) => updateEvent(i, "date_str", e.target.value)}
+                      autoComplete="off"
+                      onChange={(e) => updateEvent(row.id, "date_str", e.target.value)}
                     />
                     <input
                       className="input-field text-sm"
-                      value={evt.time_str}
+                      defaultValue={row.time_str}
                       placeholder="19:00"
-                      onChange={(e) => updateEvent(i, "time_str", e.target.value)}
+                      autoComplete="off"
+                      onChange={(e) => updateEvent(row.id, "time_str", e.target.value)}
                     />
                     <input
                       className="input-field text-sm"
-                      value={evt.event_name}
+                      defaultValue={row.event_name}
                       placeholder="Gebetsstunde"
-                      onChange={(e) => updateEvent(i, "event_name", e.target.value)}
+                      autoComplete="off"
+                      onChange={(e) => updateEvent(row.id, "event_name", e.target.value)}
                     />
                     <input
                       className="input-field text-sm"
-                      value={evt.note}
+                      defaultValue={row.note}
                       placeholder="z.B. fällt aus"
-                      onChange={(e) => updateEvent(i, "note", e.target.value)}
+                      autoComplete="off"
+                      onChange={(e) => updateEvent(row.id, "note", e.target.value)}
                     />
                     <button
                       type="button"
-                      onClick={() => removeEvent(i)}
+                      onClick={() => removeEvent(row.id)}
                       className="w-7 h-7 flex items-center justify-center rounded-lg text-[var(--text-secondary)] hover:text-[var(--danger)] hover:bg-[var(--danger)]/10 transition-colors"
                       title="Zeile entfernen"
                     >
@@ -1211,7 +1234,7 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-              {getEvents().length === 0 && (
+              {eventRows.length === 0 && (
                 <p className="text-sm text-[var(--text-secondary)] text-center py-4">
                   Keine Einträge. Klicke &quot;+ Zeile hinzufügen&quot; um einen Termin einzutragen.
                 </p>

@@ -108,6 +108,9 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     prs, template_indices = build_presentation_from_plan(TEMPLATE_PATH, slide_plan, output_path)
 
     # === Phase 3: Hintergrundbild auf Thema-Folien setzen ===
+    # Geometrie der Hintergrundbilder zuerst auf Foliengröße normalisieren,
+    # damit das Bild auf allen Folien sauber im 4:3-Format sitzt.
+    _normalize_theme_image_geometry(prs)
     if image_path and os.path.exists(image_path):
         _set_theme_image(prs, image_path)
 
@@ -149,41 +152,81 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     return output_path
 
 
-def _set_theme_image(prs, image_path: str):
-    """Ersetzt das Template-Hintergrundbild auf allen Folien.
+_THEME_IMAGE_SHAPE_NAME = "Grafik 5"
 
-    Findet das ursprüngliche Template-Bild (224KB Platzhalter) und
-    ersetzt es überall durch das neue Sonntagsbild.
+
+def _iter_theme_image_shapes(prs):
+    """Yields all theme background image shapes (named 'Grafik 5').
+
+    Identifizierung über den Shape-Namen statt shape_type, da einige
+    importierte Lied-Shapes keinen erkennbaren shape_type haben und dann
+    einen NotImplementedError werfen würden.
+    """
+    pic_tag = qn('p:pic')
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.name != _THEME_IMAGE_SHAPE_NAME:
+                continue
+            if shape._element.tag != pic_tag:
+                continue
+            yield slide, shape
+
+
+def _set_theme_image(prs, image_path: str):
+    """Ersetzt das Template-Hintergrundbild auf allen Thema-Folien.
+
+    Sucht alle Bild-Shapes mit dem Template-Namen ('Grafik 5') und ersetzt
+    deren Bilddaten durch das hochgeladene Bild – unabhängig von der
+    Dateigröße. Song-Logos und andere Bilder bleiben unangetastet.
     """
     with open(image_path, 'rb') as f:
         new_blob = f.read()
 
-    # Alle Image-Parts durchgehen und das Template-Bild ersetzen
     replaced_parts = set()
     count = 0
 
-    for slide in prs.slides:
-        blips = slide._element.findall('.//{%s}blip' % _nsmap['a'])
-        for blip in blips:
-            rId = blip.get('{%s}embed' % _nsmap['r'])
-            if not rId:
-                continue
-            try:
-                rel = slide.part.rels[rId]
-                part_id = id(rel.target_part)
-                if part_id in replaced_parts:
-                    count += 1
-                    continue
-                # Nur das Template-Bild ersetzen (nicht Song-Logos etc.)
-                # Template-Bild ist deutlich kleiner als das Sonntagsbild
-                if len(rel.target_part._blob) < len(new_blob):
-                    rel.target_part._blob = new_blob
-                    replaced_parts.add(part_id)
-                    count += 1
-            except (KeyError, AttributeError) as e:
-                log.warning(f"Bild konnte nicht ersetzt werden: {e}")
+    for slide, shape in _iter_theme_image_shapes(prs):
+        blip = shape._element.find('.//{%s}blip' % _nsmap['a'])
+        if blip is None:
+            continue
+        rId = blip.get('{%s}embed' % _nsmap['r'])
+        if not rId:
+            continue
+        try:
+            rel = slide.part.rels[rId]
+            part_id = id(rel.target_part)
+            if part_id not in replaced_parts:
+                rel.target_part._blob = new_blob
+                replaced_parts.add(part_id)
+            count += 1
+        except (KeyError, AttributeError) as e:
+            log.warning(f"Bild konnte nicht ersetzt werden: {e}")
 
     log.info(f"Hintergrundbild auf {count} Folien ersetzt")
+
+
+def _normalize_theme_image_geometry(prs):
+    """Setzt alle Theme-Hintergrundbilder ('Grafik 5') auf Foliengröße (4:3).
+
+    Im Template ragen einige Bild-Shapes über den Folienrand hinaus
+    (z.B. Begrüßungs-, Predigt- und Kinderstundenfolien). Damit das Bild
+    auf jeder Folie konsistent im 4:3-Format dargestellt wird, werden
+    Position und Größe auf den vollen Folienbereich gesetzt.
+    """
+    slide_w = prs.slide_width
+    slide_h = prs.slide_height
+    count = 0
+    for _slide, shape in _iter_theme_image_shapes(prs):
+        if (shape.left, shape.top, shape.width, shape.height) == \
+                (0, 0, slide_w, slide_h):
+            continue
+        shape.left = 0
+        shape.top = 0
+        shape.width = slide_w
+        shape.height = slide_h
+        count += 1
+    if count:
+        log.info(f"Hintergrundbild-Geometrie auf {count} Folien normalisiert (4:3)")
 
 
 def _set_theme_text_color(prs, hex_color: str):
