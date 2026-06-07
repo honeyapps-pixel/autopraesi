@@ -9,7 +9,8 @@ import sys
 import time
 from datetime import date, timedelta
 
-from config import LOG_DIR, IMAGE_DIR
+import storage
+from config import IMAGE_DIR
 from excel_reader import read_godi_plan
 from song_finder import build_song_index, find_song
 from presentation_builder import build_presentation
@@ -19,17 +20,11 @@ log = logging.getLogger("autopraesi")
 
 
 def setup_logging():
-    """Richtet Logging in Datei und Konsole ein."""
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log_file = os.path.join(LOG_DIR, f"autopraesi_{date.today().isoformat()}.log")
-
+    """Richtet Logging auf stdout ein (für GitHub Actions / Cloud-Logs)."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
-            logging.StreamHandler(),
-        ],
+        handlers=[logging.StreamHandler()],
     )
 
 
@@ -63,8 +58,8 @@ def _find_image(date_str: str):
         f"{day_short}.{month_short}.jpg",
     ]
     for name in candidates:
-        path = os.path.join(IMAGE_DIR, name)
-        if os.path.exists(path):
+        path = f"{IMAGE_DIR}/{name}"
+        if storage.file_exists(path):
             log.info(f"Hintergrundbild gefunden: {name}")
             return path
     log.warning(f"Hintergrundbild nicht gefunden (gesucht: {', '.join(candidates)})")

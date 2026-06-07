@@ -1,6 +1,6 @@
 // API-Requests gehen über den eigenen Vercel-Proxy (/api/...),
-// der serverseitig an das ngrok-Backend weiterleitet.
-// So gibt es keine CORS-/ngrok-Interstitial-Probleme auf fremden Geräten.
+// der serverseitig an das Cloud-Backend (Render) weiterleitet.
+// So gibt es keine CORS-Probleme auf fremden Geräten.
 const API = "";
 
 function get(url: string): Promise<Response> {

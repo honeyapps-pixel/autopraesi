@@ -2,7 +2,7 @@
 
 import logging
 import os
-import shutil
+import tempfile
 
 import copy
 
@@ -12,7 +12,8 @@ from pptx import Presentation
 from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml.ns import qn
 
-from config import (TEMPLATE_PATH, OUTPUT_DIR_DESKTOP, OUTPUT_DIR_DROPBOX,
+import storage
+from config import (TEMPLATE_PATH, OUTPUT_DIR_DROPBOX,
                     DEFAULT_SECTION_ORDER, SECTION_BLOCKS, INTRO_SLIDES,
                     TOGGLEABLE_SECTIONS)
 from slide_copier import build_presentation_from_plan, copy_slide
@@ -62,6 +63,31 @@ def _replace_text_in_slide(slide, old_text, new_text):
         _replace_text_in_shape(shape, old_text, new_text)
 
 
+def _localize_path(dropbox_path: str):
+    """Lädt eine Datei aus Dropbox in eine lokale Temp-Datei.
+
+    Gibt den lokalen Pfad zurück, oder None bei Fehler (z.B. Datei weg).
+    """
+    if not dropbox_path:
+        return None
+    try:
+        suffix = os.path.splitext(dropbox_path)[1]
+        return storage.download_to_temp(dropbox_path, suffix=suffix)
+    except Exception as e:
+        log.warning(f"Download aus Dropbox fehlgeschlagen ({dropbox_path}): {e}")
+        return None
+
+
+def _localize_paths(paths: dict) -> dict:
+    """Lädt alle Dropbox-Pfade eines {key: pfad}-Dicts in lokale Temp-Dateien."""
+    local = {}
+    for key, dbx_path in paths.items():
+        lp = _localize_path(dbx_path)
+        if lp:
+            local[key] = lp
+    return local
+
+
 def build_presentation(data, song_paths: dict, image_path: str = None,
                        fetch_bible: bool = True, output_name: str = None,
                        skip_slides: set = None, section_order: list = None,
@@ -74,8 +100,9 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
 
     Args:
         data: GodiPlanData-Objekt
-        song_paths: Dict {slot_key: pfad} für die Lieder (inkl. Extras)
-        image_path: Pfad zum Hintergrundbild (optional)
+        song_paths: Dict {slot_key: dropbox_pfad} für die Lieder (inkl. Extras).
+            Die Lied-.pptx werden intern aus Dropbox in Temp-Dateien geladen.
+        image_path: Dropbox-Pfad zum Hintergrundbild (optional, wird intern geladen)
         fetch_bible: Ob Bibeltexte geladen werden sollen
         output_name: Dateiname (optional, z.B. 'Pa 18.3_ungeprüft.pptx')
         skip_slides: Set von 0-basierten Template-Folien-Indizes die übersprungen werden
@@ -83,14 +110,23 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
         extra_songs: Dict {slot_key: pfad} für Extra-Lieder (song_extra1, ...)
 
     Returns:
-        Pfad zur erstellten Präsentation
+        Lokaler Temp-Pfad zur erstellten Präsentation (zusätzlich nach Dropbox hochgeladen)
     """
     # Ausgabe-Dateiname
     if output_name is None:
         day = data.date_str.split(".")[0] if data.date_str else "XX"
         month = data.date_str.split(".")[1] if data.date_str else "XX"
         output_name = f"So {day.lstrip('0')}.{month.lstrip('0')}_ungeprüft.pptx"
-    output_path = os.path.join(OUTPUT_DIR_DESKTOP, output_name)
+    # Lokal in Temp bauen (auf Render/Actions gibt es keinen Dropbox-Sync-Ordner)
+    output_path = os.path.join(tempfile.gettempdir(), output_name)
+
+    # Lieder + Bild aus Dropbox in lokale Temp-Dateien laden:
+    # python-pptx / slide_copier benötigen echte Dateipfade.
+    song_paths = _localize_paths(song_paths)
+    if extra_songs:
+        extra_songs = _localize_paths(extra_songs)
+    if image_path:
+        image_path = _localize_path(image_path)
 
     # Extra-Songs: song_extra* Pfade aus song_paths extrahieren
     all_extra = {k: v for k, v in song_paths.items() if k.startswith("song_extra")}
@@ -137,17 +173,17 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     if shadow_strength != "normal" or text_outline:
         _apply_text_effects(prs, shadow_strength, text_outline)
 
-    # === Phase 5: Speichern ===
+    # === Phase 5: Speichern (lokal in Temp) ===
     prs.save(output_path)
     log.info(f"Präsentation gespeichert: {output_path} ({len(prs.slides)} Folien)")
 
-    # Kopie in Dropbox ablegen
-    dropbox_path = os.path.join(OUTPUT_DIR_DROPBOX, output_name)
+    # Nach Dropbox hochladen, damit die Datei im Gemeinde-Ordner erscheint
+    dropbox_path = f"{OUTPUT_DIR_DROPBOX}/{output_name}"
     try:
-        shutil.copy2(output_path, dropbox_path)
-        log.info(f"Kopie in Dropbox: {dropbox_path}")
+        storage.upload_file(output_path, dropbox_path)
+        log.info(f"In Dropbox abgelegt: {dropbox_path}")
     except Exception as e:
-        log.warning(f"Dropbox-Kopie fehlgeschlagen: {e}")
+        log.warning(f"Dropbox-Upload fehlgeschlagen: {e}")
 
     return output_path
 

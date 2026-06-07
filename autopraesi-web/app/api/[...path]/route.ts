@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// Backend-URL des Cloud-Dienstes (Render). Per Vercel-Env NEXT_PUBLIC_API_URL gesetzt.
 const BACKEND =
   process.env.NEXT_PUBLIC_API_URL ||
-  "https://tawniest-uxorially-boyce.ngrok-free.dev";
+  "https://autopraesi-api.onrender.com";
 
 export async function GET(
   req: NextRequest,
@@ -11,9 +12,7 @@ export async function GET(
   const { path } = await params;
   const url = new URL(req.url);
   const target = `${BACKEND}/api/${path.join("/")}${url.search}`;
-  const res = await fetch(target, {
-    headers: { "ngrok-skip-browser-warning": "1" },
-  });
+  const res = await fetch(target);
   return proxy(res);
 }
 
@@ -29,7 +28,6 @@ export async function POST(
   const res = await fetch(target, {
     method: "POST",
     headers: {
-      "ngrok-skip-browser-warning": "1",
       "Content-Type": contentType,
     },
     body: contentType.includes("json") ? await req.text() : await req.arrayBuffer(),

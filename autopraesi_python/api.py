@@ -1,19 +1,21 @@
 """AutoPräsi API – FastAPI Backend für die Web-UI."""
 from __future__ import annotations
 
+import io
 import logging
 import os
-import tempfile
 from dataclasses import asdict
 from typing import Optional
+from urllib.parse import quote
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+import openpyxl
+from fastapi import FastAPI, UploadFile, File, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from config import (IMAGE_DIR, OUTPUT_DIR_DESKTOP, TOGGLEABLE_SECTIONS,
-                    DEFAULT_SECTION_ORDER)
+import storage
+from config import (IMAGE_DIR, OUTPUT_DIR_DROPBOX, GODI_PLAN_DIR,
+                    TOGGLEABLE_SECTIONS, DEFAULT_SECTION_ORDER)
 from excel_reader import list_all_sheets, read_godi_plan_by_sheet, GodiPlanData, parse_song_entry
 from song_finder import build_song_index, find_song
 from presentation_builder import build_presentation
@@ -53,8 +55,8 @@ def _find_image(date_str: str) -> Optional[str]:
     day_short = str(int(day))
     month_short = str(int(month))
     for name in [f"Bild {day}.{month}.jpg", f"{day_short}.{month_short}.jpg"]:
-        path = os.path.join(IMAGE_DIR, name)
-        if os.path.exists(path):
+        path = f"{IMAGE_DIR}/{name}"
+        if storage.file_exists(path):
             return path
     return None
 
@@ -142,7 +144,7 @@ def get_sections():
 @app.get("/api/sheet/{sheet_name}")
 def get_sheet_data(sheet_name: str, excel_path: str):
     """Liest die Daten eines Sheets und gibt sie als JSON zurück."""
-    data = read_godi_plan_by_sheet(sheet_name, excel_path, skip_dropbox_sync=True)
+    data = read_godi_plan_by_sheet(sheet_name, excel_path)
     if not data:
         raise HTTPException(404, f"Sheet '{sheet_name}' nicht gefunden")
 
@@ -187,7 +189,7 @@ def get_sheet_data(sheet_name: str, excel_path: str):
 def get_sheet_rows(sheet_name: str, excel_path: str):
     """Gibt die rohen Excel-Zeilen eines Sheets zurück (Uhrzeit, Programm, Details)."""
     import datetime
-    wb = __import__("openpyxl").load_workbook(excel_path, data_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(storage.download_bytes(excel_path)), data_only=True)
     ws = None
     for name in wb.sheetnames:
         if name.strip() == sheet_name:
@@ -238,27 +240,32 @@ def search_song(raw: str):
 
 @app.get("/api/image")
 def get_image(path: str):
-    """Gibt ein Bild als Datei zurück (für Vorschau im Frontend)."""
-    if not os.path.isfile(path):
+    """Gibt ein Bild aus Dropbox zurück (für Vorschau im Frontend)."""
+    if not storage.file_exists(path):
         raise HTTPException(404, "Bild nicht gefunden")
-    return FileResponse(path)
+    data = storage.download_bytes(path)
+    media = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+    return Response(content=data, media_type=media)
 
 
 @app.post("/api/upload-image")
 async def upload_image(file: UploadFile = File(...)):
-    """Lädt ein Bild hoch und gibt den temporären Pfad zurück."""
-    suffix = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir=tempfile.gettempdir())
+    """Lädt ein Bild nach Dropbox hoch und gibt den Dropbox-Pfad zurück.
+
+    Ablage unter /Gemeinde/_uploads, damit das Bild den Request-Übergang
+    (Upload → Generate, ggf. anderer Cloud-Worker) überlebt.
+    """
     content = await file.read()
-    tmp.write(content)
-    tmp.close()
-    return {"path": tmp.name, "filename": file.filename}
+    filename = file.filename or "upload.jpg"
+    dest = f"{IMAGE_DIR}/_uploads/{filename}"
+    storage.upload_bytes(content, dest)
+    return {"path": dest, "filename": filename}
 
 
 @app.post("/api/generate")
 def generate_presentation(req: GenerateRequest):
     """Generiert die Präsentation."""
-    data = read_godi_plan_by_sheet(req.sheet_name, req.excel_path, skip_dropbox_sync=True)
+    data = read_godi_plan_by_sheet(req.sheet_name, req.excel_path)
     if not data:
         raise HTTPException(404, f"Sheet '{req.sheet_name}' nicht gefunden")
 
@@ -364,23 +371,27 @@ def generate_presentation(req: GenerateRequest):
 
 @app.get("/api/download/{filename}")
 def download_file(filename: str):
-    """Generierte Präsentation herunterladen."""
-    path = os.path.join(OUTPUT_DIR_DESKTOP, filename)
-    if not os.path.exists(path):
+    """Generierte Präsentation aus Dropbox herunterladen."""
+    dbx_path = f"{OUTPUT_DIR_DROPBOX}/{filename}"
+    if not storage.file_exists(dbx_path):
         raise HTTPException(404, f"Datei nicht gefunden: {filename}")
-    return FileResponse(path, filename=filename,
-                        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")
+    data = storage.download_bytes(dbx_path)
+    # RFC 5987: nicht-ASCII Dateinamen (z.B. "ungeprüft") korrekt kodieren
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
+    )
 
 
 @app.post("/api/upload-excel")
 async def upload_excel(file: UploadFile = File(...)):
-    """Lädt eine Excel-Datei hoch und gibt den Pfad zurück."""
+    """Lädt eine Excel-Datei nach Dropbox hoch und gibt den Dropbox-Pfad zurück."""
     if not file.filename or not file.filename.endswith(".xlsx"):
         raise HTTPException(400, "Nur .xlsx Dateien erlaubt")
-    dest = os.path.join(GODI_PLAN_DIR, file.filename)
     content = await file.read()
-    with open(dest, "wb") as f:
-        f.write(content)
+    dest = f"{GODI_PLAN_DIR}/{file.filename}"
+    storage.upload_bytes(content, dest)
     log.info(f"Excel hochgeladen: {dest}")
     return {"success": True, "path": dest, "filename": file.filename}
 

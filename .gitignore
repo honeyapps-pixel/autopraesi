@@ -14,9 +14,18 @@ node_modules/
 # Generated files
 *.pptx
 !v_1_4_3_ab2026/*.pptx
+!autopraesi_python/assets/*.pptx
 
 # Vercel
 .vercel/
+.env.vercel
+
+# Env / secrets
+.env
+.env*.local
+
+# Build artifacts
+*.tsbuildinfo
 
 # Temp
 *.log

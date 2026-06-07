@@ -2,32 +2,30 @@
 
 import os
 
-# Basis-Pfade
-HOME = os.path.expanduser("~")
-DROPBOX_GEMEINDE = os.path.join(HOME, "Dropbox", "Gemeinde")
-DESKTOP_AUTOPRAESI = os.path.join(HOME, "Desktop", "Projekte", "Autopräsi")
+# --- Dropbox-Pfade (Cloud-Zugriff über die Dropbox-API, siehe storage.py) ---
+# Alle Daten liegen im geteilten Gemeinde-Ordner; das Backend greift per API
+# darauf zu, unabhängig davon ob ein lokaler Dropbox-Sync läuft.
+DROPBOX_GEMEINDE = "/Gemeinde"
 
-# Template
-TEMPLATE_PATH = os.path.join(
-    DESKTOP_AUTOPRAESI, "v_1_4_3_ab2026",
-    "Vorlage_Godi_Standard_Sonntag_v1_4_3.pptx"
-)
-
-# Lied-Bibliothek
-SONG_LIBRARY = os.path.join(DROPBOX_GEMEINDE, "Brüderrecords°")
+# Lied-Bibliothek (Sonderzeichen "°" ist im Dropbox-Pfad korrekt)
+SONG_LIBRARY = "/Gemeinde/Brüderrecords°"
 
 # Bild-Verzeichnis
 IMAGE_DIR = DROPBOX_GEMEINDE
 
-# Ausgabe-Verzeichnisse
+# Ausgabe-Verzeichnisse (fertige .pptx landet wieder im Gemeinde-Ordner)
 OUTPUT_DIR_DESKTOP = DROPBOX_GEMEINDE
 OUTPUT_DIR_DROPBOX = DROPBOX_GEMEINDE
 
 # GoDi-Plan Excel Verzeichnis
 GODI_PLAN_DIR = DROPBOX_GEMEINDE
 
-# Logging
-LOG_DIR = os.path.join(DESKTOP_AUTOPRAESI, "autopraesi_python", "logs")
+# Template (statisches Asset im Repo, repo-relativ aufgelöst – funktioniert auf
+# Render und in GitHub Actions unabhängig vom Arbeitsverzeichnis)
+TEMPLATE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "assets", "Vorlage_Godi_Standard_Sonntag_v1_4_3.pptx"
+)
 
 # --- Excel Zeilen-Mappings (1-indexed) ---
 

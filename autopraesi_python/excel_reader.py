@@ -1,18 +1,16 @@
-"""Liest den GoDi-Plan aus der Excel-Datei."""
+"""Liest den GoDi-Plan aus der Excel-Datei (Zugriff über die Dropbox-API)."""
 from __future__ import annotations
 
-import glob
+import io
 import logging
-import os
 import re
-import subprocess
-import time
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 import openpyxl
 
+import storage
 from config import (GODI_PLAN_DIR, EXCEL_ROWS, ABKUENDIGUNGEN_ROWS,
                      EINLADUNG_ROW_START, EINLADUNG_ROW_END, EINLADUNG_COLS)
 
@@ -335,110 +333,53 @@ def _parse_header(header: str) -> tuple:
     return date_str, kirche
 
 
-def _check_dropbox_running() -> bool:
-    """Prüft ob der Dropbox-Prozess läuft."""
-    try:
-        result = subprocess.run(["pgrep", "-x", "Dropbox"],
-                                capture_output=True, timeout=5)
-        return result.returncode == 0
-    except Exception:
-        return False
-
-
-def _trigger_dropbox_sync() -> None:
-    """Startet Dropbox falls nötig und wartet auf Synchronisation."""
-    if not _check_dropbox_running():
-        log.info("Dropbox läuft nicht – wird gestartet...")
-        subprocess.run(["open", "-a", "Dropbox"], timeout=10)
-        # Warten bis Dropbox-Prozess läuft
-        for _ in range(15):
-            time.sleep(1)
-            if _check_dropbox_running():
-                log.info("Dropbox gestartet.")
-                break
-        else:
-            raise RuntimeError(
-                "Dropbox konnte nicht gestartet werden. "
-                "Bitte manuell starten und erneut versuchen."
-            )
-
-    # Dropbox-Ordner anfassen um Sync anzustoßen
-    log.info("Warte auf Dropbox-Synchronisation...")
-    os.listdir(GODI_PLAN_DIR)
-    time.sleep(120)
-    log.info("Dropbox-Sync abgeschlossen (2 Min. gewartet).")
-
-
-def _ensure_dropbox_sync(excel_path: str) -> None:
-    """Stellt sicher, dass die Excel-Datei aus Dropbox aktuell ist."""
-    _trigger_dropbox_sync()
-
-    if not _check_dropbox_running():
-        raise RuntimeError(
-            "Dropbox läuft NICHT! Die Excel-Datei könnte veraltet sein. "
-            "Bitte Dropbox starten und erneut versuchen."
-        )
-
-    if GODI_PLAN_DIR not in excel_path:
-        raise RuntimeError(
-            f"Excel-Datei stammt nicht aus Dropbox ({excel_path}). "
-            f"Erwartet wird eine Datei in {GODI_PLAN_DIR}."
-        )
-
-    mtime = os.path.getmtime(excel_path)
-    mtime_dt = datetime.fromtimestamp(mtime)
-    age_hours = (datetime.now() - mtime_dt).total_seconds() / 3600
-    log.info(f"Dropbox-Excel zuletzt geändert: {mtime_dt:%d.%m.%Y %H:%M} "
-             f"(vor {age_hours:.1f} Stunden)")
-
-    log.info("Dropbox läuft – Excel-Datei ist aktuell.")
+def _is_godi_plan(name: str) -> bool:
+    """Prüft, ob ein Dateiname eine GoDi-Plan Excel-Datei ist."""
+    return name.startswith("GoDi-Plan") and name.lower().endswith(".xlsx")
 
 
 def find_godi_plan_excel(sunday: date) -> Optional[str]:
     """Findet die richtige GoDi-Plan Excel-Datei im Dropbox-Ordner."""
     sheet_name = f"So {sunday.day}.{sunday.month}"
 
-    # NUR aus Dropbox lesen – kein Desktop-Fallback
-    search_dirs = [GODI_PLAN_DIR]
-    for search_dir in search_dirs:
-        pattern = os.path.join(search_dir, "GoDi-Plan*.xlsx")
-        for path in glob.glob(pattern):
-            if path.endswith("~$GoDi-Plan"):  # Lock-Dateien ignorieren
-                continue
-            if "~$" in os.path.basename(path):
-                continue
-            try:
-                wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-                # Prüfe ob Sheet existiert (auch mit trailing space)
-                for name in wb.sheetnames:
-                    if name.strip() == sheet_name:
-                        wb.close()
-                        log.info(f"GoDi-Plan gefunden: {path}, Sheet: {name}")
-                        return path
-                wb.close()
-            except Exception as e:
-                log.warning(f"Fehler beim Öffnen von {path}: {e}")
+    for name, path in storage.list_files(GODI_PLAN_DIR, suffix=".xlsx"):
+        if not _is_godi_plan(name):
+            continue
+        try:
+            wb = openpyxl.load_workbook(
+                io.BytesIO(storage.download_bytes(path)),
+                read_only=True, data_only=True)
+            # Prüfe ob Sheet existiert (auch mit trailing space)
+            for sheet in wb.sheetnames:
+                if sheet.strip() == sheet_name:
+                    wb.close()
+                    log.info(f"GoDi-Plan gefunden: {path}, Sheet: {sheet}")
+                    return path
+            wb.close()
+        except Exception as e:
+            log.warning(f"Fehler beim Öffnen von {path}: {e}")
 
     return None
 
 
 def list_all_sheets() -> list[tuple[str, str]]:
-    """Listet alle Sheets aus allen GoDi-Plan Excel-Dateien.
+    """Listet alle Sheets aus allen GoDi-Plan Excel-Dateien (in Dropbox).
 
     Returns:
-        Liste von (sheet_name, excel_path) Tupeln.
-        Hilfs-Sheets (Überblick, Vorlage, etc.) werden gefiltert.
+        Liste von (sheet_name, excel_path) Tupeln, wobei excel_path ein
+        Dropbox-Pfad ist. Hilfs-Sheets (Überblick, Vorlage, etc.) werden gefiltert.
     """
     skip = {"Überblick", "GoDi-Vorlage", "Nächsten GoDis im nächsten Plan"}
     results = []
-    pattern = os.path.join(GODI_PLAN_DIR, "GoDi-Plan*.xlsx")
-    for path in glob.glob(pattern):
-        if "~$" in os.path.basename(path):
+    for name, path in storage.list_files(GODI_PLAN_DIR, suffix=".xlsx"):
+        if not _is_godi_plan(name):
             continue
         try:
-            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-            for name in wb.sheetnames:
-                stripped = name.strip()
+            wb = openpyxl.load_workbook(
+                io.BytesIO(storage.download_bytes(path)),
+                read_only=True, data_only=True)
+            for sheet in wb.sheetnames:
+                stripped = sheet.strip()
                 if stripped and stripped not in skip:
                     results.append((stripped, path))
             wb.close()
@@ -447,19 +388,15 @@ def list_all_sheets() -> list[tuple[str, str]]:
     return results
 
 
-def read_godi_plan_by_sheet(sheet_name: str, excel_path: str,
-                             skip_dropbox_sync: bool = False) -> GodiPlanData | None:
+def read_godi_plan_by_sheet(sheet_name: str, excel_path: str) -> GodiPlanData | None:
     """Liest den GoDi-Plan für ein beliebiges Sheet.
 
     Args:
         sheet_name: Name des Sheets (z.B. 'So 15.3', 'Pa 18.3')
-        excel_path: Pfad zur Excel-Datei
-        skip_dropbox_sync: True für interaktive Nutzung (kein 120s Wait)
+        excel_path: Dropbox-Pfad zur Excel-Datei
     """
-    if not skip_dropbox_sync:
-        _ensure_dropbox_sync(excel_path)
-
-    wb = openpyxl.load_workbook(excel_path, data_only=True)
+    wb = openpyxl.load_workbook(
+        io.BytesIO(storage.download_bytes(excel_path)), data_only=True)
 
     # Sheet finden (mit trailing space Fallback)
     ws = None

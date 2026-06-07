@@ -1,0 +1,22 @@
+# Render-Konfiguration für das AutoPräsi-Backend (FastAPI).
+# Render erkennt diese Datei beim "New > Blueprint"/Web-Service-Anlegen.
+# Free-Tier: Der Dienst schläft nach ~15 Min. Leerlauf und wacht beim ersten
+# Zugriff in ~30-60 Sek. wieder auf.
+services:
+  - type: web
+    name: autopraesi-api
+    runtime: python
+    plan: free
+    rootDir: autopraesi_python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # Werte im Render-Dashboard setzen (sync: false = nicht aus dieser Datei)
+      - key: DROPBOX_APP_KEY
+        sync: false
+      - key: DROPBOX_APP_SECRET
+        sync: false
+      - key: DROPBOX_REFRESH_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.11.9"

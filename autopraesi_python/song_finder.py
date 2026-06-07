@@ -6,34 +6,33 @@ import os
 import re
 from typing import Optional
 
+import storage
 from config import SONG_LIBRARY, SONG_DIRS
 
 log = logging.getLogger(__name__)
 
 
 def build_song_index(library_path: str = SONG_LIBRARY) -> dict:
-    """Indexiert alle PPTX-Dateien in der Lied-Bibliothek.
+    """Indexiert alle PPTX-Dateien in der Lied-Bibliothek (in Dropbox).
 
     Returns:
-        Dict mit {unterordner_name: [(dateiname, voller_pfad), ...]}
+        Dict mit {unterordner_name: [(dateiname, dropbox_pfad), ...]}
     """
+    from dropbox.files import FolderMetadata
+
     index = {}
-    if not os.path.exists(library_path):
-        log.error(f"Lied-Bibliothek nicht gefunden: {library_path}")
+    try:
+        entries = storage.list_folder(library_path)
+    except Exception as e:
+        log.error(f"Lied-Bibliothek nicht lesbar ({library_path}): {e}")
         return index
 
-    for entry in os.listdir(library_path):
-        subdir = os.path.join(library_path, entry)
-        if not os.path.isdir(subdir):
+    for entry in entries:
+        if not isinstance(entry, FolderMetadata):
             continue
-
-        files = []
-        for f in os.listdir(subdir):
-            if f.lower().endswith(".pptx") and not f.startswith("~$"):
-                files.append((f, os.path.join(subdir, f)))
-
-        index[entry] = files
-        log.debug(f"Index: {entry} → {len(files)} Dateien")
+        files = storage.list_files(entry.path_lower, suffix=".pptx")
+        index[entry.name] = files
+        log.debug(f"Index: {entry.name} → {len(files)} Dateien")
 
     total = sum(len(v) for v in index.values())
     log.info(f"Song-Index erstellt: {total} Dateien in {len(index)} Ordnern")
