@@ -85,12 +85,16 @@ def list_folder(path: str, *, recursive: bool = False) -> list:
 
 
 def list_files(path: str, suffix: Optional[str] = None) -> list[tuple[str, str]]:
-    """Listet nur Dateien eines Ordners als (name, path_lower)-Tupel.
+    """Listet nur Dateien eines Ordners als (name, path)-Tupel.
 
     Args:
         path: Dropbox-Ordnerpfad (z.B. "/Gemeinde").
         suffix: Optionaler Endungsfilter (z.B. ".pptx", ".xlsx"), case-insensitiv.
 
+    Verwendet ``path_display`` (Originalschreibweise), damit Pfade z.B. für den
+    Quartalsfilter im Frontend die echte Groß-/Kleinschreibung behalten
+    (z.B. ".../GoDi-Plan 2026_Q2.xlsx"). Dropbox-Downloads sind case-insensitiv,
+    daher funktionieren spätere Zugriffe damit weiterhin.
     Überspringt Office-Lock-Dateien ("~$...").
     """
     from dropbox.files import FileMetadata
@@ -103,7 +107,7 @@ def list_files(path: str, suffix: Optional[str] = None) -> list[tuple[str, str]]
             continue
         if suffix and not entry.name.lower().endswith(suffix.lower()):
             continue
-        result.append((entry.name, entry.path_lower))
+        result.append((entry.name, entry.path_display))
     return result
 
 
