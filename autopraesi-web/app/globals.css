@@ -98,7 +98,27 @@ body {
 .godi-grid-scroll {
   /* dezente Hintergrund-Schraffur außerhalb der Zellen ist nicht nötig – weiß wie Excel */
   scrollbar-width: thin;
+  max-height: calc(100dvh - 230px);
+  -webkit-overflow-scrolling: touch;
 }
+
+@media (max-width: 768px) {
+  .godi-grid-scroll { max-height: calc(100dvh - 196px); }
+}
+
+/* Kompakte Darstellung auf Mobil: kleinere Zellen, Köpfe und Eingaben */
+.godi-compact .godi-cell {
+  font-size: 11px;
+  padding: 0 4px;
+  line-height: 1.2;
+}
+.godi-compact .godi-colhead,
+.godi-compact .godi-rowhead,
+.godi-compact .godi-corner {
+  font-size: 9px;
+}
+.godi-compact .godi-colhead { height: 18px; }
+.godi-compact .godi-input { font-size: 11px; }
 
 .godi-cell,
 .godi-colhead,

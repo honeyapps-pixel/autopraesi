@@ -177,6 +177,16 @@ export default function GodiPlanTab() {
   const dirty = ops.length > 0;
   const gridScrollRef = useRef<HTMLDivElement>(null);
 
+  // Kompakte Darstellung auf Mobil (kleinere Zellen/Spalten)
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 768px)");
+    const update = () => setCompact(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+
   // --- Initial: kommender Sonntag + Datei-Liste ---
   useEffect(() => {
     let cancelled = false;
@@ -386,7 +396,7 @@ export default function GodiPlanTab() {
   }
 
   return (
-    <div className="max-w-[120rem] mx-auto px-4 py-5">
+    <div className="max-w-[120rem] mx-auto px-2 sm:px-4 py-3 sm:py-5">
       <Toolbar
         files={files}
         excelPath={excelPath}
@@ -427,13 +437,13 @@ export default function GodiPlanTab() {
       <div
         ref={gridScrollRef}
         className={`godi-grid-scroll overflow-auto rounded-xl border border-[var(--card-border)] bg-white shadow-sm transition-opacity duration-150 ${
-          loading ? "opacity-40" : "opacity-100"
-        }`}
-        style={{ maxHeight: "calc(100dvh - 230px)" }}
+          compact ? "godi-compact" : ""
+        } ${loading ? "opacity-40" : "opacity-100"}`}
       >
         {grid && (
           <GridTable
             grid={grid}
+            compact={compact}
             sel={sel}
             anchor={anchor}
             editing={editing}
@@ -504,100 +514,104 @@ function Toolbar(props: {
   const s = props.activeStyle;
   const dis = !props.hasSelection;
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--card-border)] bg-[var(--card)] backdrop-blur px-3 py-2">
-      {/* Datei-Auswahl */}
-      <select
-        className="text-sm bg-white border border-[var(--card-border)] rounded-lg px-2.5 py-1.5 outline-none cursor-pointer focus:border-[var(--accent)] max-w-[15rem]"
-        value={props.excelPath || ""}
-        onChange={(e) => props.onSwitchFile(e.target.value)}
-        title="Excel-Datei wählen"
-      >
-        {props.files.map((f) => (
-          <option key={f.excel_path} value={f.excel_path}>
-            {f.name.replace(/\.xlsx$/, "")}
-            {f.is_current_quarter ? "  · aktuell" : ""}
-          </option>
-        ))}
-      </select>
-
-      <Divider />
-
-      <TbBtn onClick={props.onBold} active={!!s?.b} disabled={dis} label="Fett" className="font-bold">B</TbBtn>
-      <TbBtn onClick={props.onItalic} active={!!s?.i} disabled={dis} label="Kursiv" className="italic font-serif">I</TbBtn>
-
-      <Divider />
-
-      {/* Ausrichtung */}
-      {([["left", "Links"], ["center", "Mitte"], ["right", "Rechts"]] as const).map(([a, lbl]) => (
-        <TbBtn key={a} onClick={() => props.onAlign(a)} active={s?.a === a} disabled={dis} label={`Ausrichtung ${lbl}`}>
-          <AlignIcon a={a} />
-        </TbBtn>
-      ))}
-
-      <Divider />
-
-      {/* Textfarbe */}
-      <div className="flex items-center gap-1" title="Textfarbe">
-        <button disabled={dis} onClick={() => props.onColor("#000000")} className="tb-swatch" style={{ background: "#1d1d1f" }} aria-label="Schrift schwarz" />
-        <button disabled={dis} onClick={() => props.onColor("#FFFFFF")} className="tb-swatch border border-[var(--card-border)]" style={{ background: "#fff" }} aria-label="Schrift weiß" />
-      </div>
-
-      <Divider />
-
-      {/* Füllung */}
-      <div className="flex items-center gap-1" title="Zellfarbe">
-        {FILL_SWATCHES.map((sw) => (
-          <button
-            key={sw.label}
-            disabled={dis}
-            onClick={() => props.onFill(sw.c)}
-            className="tb-swatch border border-[var(--card-border)] relative"
-            style={{ background: sw.c || "#fff" }}
-            aria-label={sw.label}
-            title={sw.label}
-          >
-            {sw.c === null && <span className="absolute inset-0 flex items-center justify-center text-[var(--danger)] text-xs leading-none">⁄</span>}
-          </button>
-        ))}
-      </div>
-
-      <Divider />
-
-      <TbBtn onClick={props.onMerge} disabled={dis} label="Zellen verbinden"><MergeIcon /></TbBtn>
-      <TbBtn onClick={props.onUnmerge} disabled={dis} label="Verbindung lösen"><UnmergeIcon /></TbBtn>
-
-      <Divider />
-
-      {/* Zeilen / Spalten */}
-      <TbBtn onClick={props.onInsertRow} disabled={dis} label="Zeile einfügen">+Zeile</TbBtn>
-      <TbBtn onClick={props.onDeleteRow} disabled={dis} label="Zeile löschen" danger>−Zeile</TbBtn>
-      <TbBtn onClick={props.onInsertCol} disabled={dis} label="Spalte einfügen">+Spalte</TbBtn>
-      <TbBtn onClick={props.onDeleteCol} disabled={dis} label="Spalte löschen" danger>−Spalte</TbBtn>
-
-      {/* Sync rechts */}
-      <div className="ml-auto flex items-center gap-2.5">
-        {props.dirty && (
-          <span className="text-xs text-[var(--warning)] font-medium tabular-nums">
-            {props.pendingCount} {props.pendingCount === 1 ? "Änderung" : "Änderungen"}
-          </span>
-        )}
-        <button
-          onClick={props.onSync}
-          disabled={!props.dirty || props.saving}
-          className="flex items-center gap-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium px-4 py-1.5 transition-all duration-150 enabled:hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+    <div className="rounded-xl border border-[var(--card-border)] bg-[var(--card)] backdrop-blur px-2 py-2 sm:px-3 space-y-2">
+      {/* Reihe 1: Datei-Auswahl + Sync */}
+      <div className="flex items-center gap-2">
+        <select
+          className="text-sm bg-white border border-[var(--card-border)] rounded-lg px-2.5 py-1.5 outline-none cursor-pointer focus:border-[var(--accent)] min-w-0 flex-1 sm:flex-none sm:max-w-[15rem]"
+          value={props.excelPath || ""}
+          onChange={(e) => props.onSwitchFile(e.target.value)}
+          title="Excel-Datei wählen"
         >
-          {props.saving ? (
-            <>
-              <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              Synchronisiere…
-            </>
-          ) : (
-            <>
-              <SyncIcon />
-              Mit Dropbox synchronisieren
-            </>
+          {props.files.map((f) => (
+            <option key={f.excel_path} value={f.excel_path}>
+              {f.name.replace(/\.xlsx$/, "")}
+              {f.is_current_quarter ? "  · aktuell" : ""}
+            </option>
+          ))}
+        </select>
+
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          {props.dirty && (
+            <span className="text-xs text-[var(--warning)] font-medium tabular-nums whitespace-nowrap">
+              {props.pendingCount} {props.pendingCount === 1 ? "Änderung" : "Änderungen"}
+            </span>
           )}
-        </button>
+          <button
+            onClick={props.onSync}
+            disabled={!props.dirty || props.saving}
+            className="flex items-center gap-2 rounded-lg bg-[var(--accent)] text-white text-sm font-medium px-3 sm:px-4 py-1.5 transition-all duration-150 enabled:hover:bg-[var(--accent-hover)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+          >
+            {props.saving ? (
+              <>
+                <span className="inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span className="hidden sm:inline">Synchronisiere…</span>
+                <span className="sm:hidden">Sync…</span>
+              </>
+            ) : (
+              <>
+                <SyncIcon />
+                <span className="hidden sm:inline">Mit Dropbox synchronisieren</span>
+                <span className="sm:hidden">Sync</span>
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Reihe 2: Werkzeuge – auf Mobil horizontal scrollbar, auf Desktop umbrechend */}
+      <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto sm:flex-wrap sm:overflow-visible -mx-1 px-1 [&>*]:shrink-0">
+        <TbBtn onClick={props.onBold} active={!!s?.b} disabled={dis} label="Fett" className="font-bold">B</TbBtn>
+        <TbBtn onClick={props.onItalic} active={!!s?.i} disabled={dis} label="Kursiv" className="italic font-serif">I</TbBtn>
+
+        <Divider />
+
+        {/* Ausrichtung */}
+        {([["left", "Links"], ["center", "Mitte"], ["right", "Rechts"]] as const).map(([a, lbl]) => (
+          <TbBtn key={a} onClick={() => props.onAlign(a)} active={s?.a === a} disabled={dis} label={`Ausrichtung ${lbl}`}>
+            <AlignIcon a={a} />
+          </TbBtn>
+        ))}
+
+        <Divider />
+
+        {/* Textfarbe */}
+        <div className="flex items-center gap-1" title="Textfarbe">
+          <button disabled={dis} onClick={() => props.onColor("#000000")} className="tb-swatch" style={{ background: "#1d1d1f" }} aria-label="Schrift schwarz" />
+          <button disabled={dis} onClick={() => props.onColor("#FFFFFF")} className="tb-swatch border border-[var(--card-border)]" style={{ background: "#fff" }} aria-label="Schrift weiß" />
+        </div>
+
+        <Divider />
+
+        {/* Füllung */}
+        <div className="flex items-center gap-1" title="Zellfarbe">
+          {FILL_SWATCHES.map((sw) => (
+            <button
+              key={sw.label}
+              disabled={dis}
+              onClick={() => props.onFill(sw.c)}
+              className="tb-swatch border border-[var(--card-border)] relative"
+              style={{ background: sw.c || "#fff" }}
+              aria-label={sw.label}
+              title={sw.label}
+            >
+              {sw.c === null && <span className="absolute inset-0 flex items-center justify-center text-[var(--danger)] text-xs leading-none">⁄</span>}
+            </button>
+          ))}
+        </div>
+
+        <Divider />
+
+        <TbBtn onClick={props.onMerge} disabled={dis} label="Zellen verbinden"><MergeIcon /></TbBtn>
+        <TbBtn onClick={props.onUnmerge} disabled={dis} label="Verbindung lösen"><UnmergeIcon /></TbBtn>
+
+        <Divider />
+
+        {/* Zeilen / Spalten */}
+        <TbBtn onClick={props.onInsertRow} disabled={dis} label="Zeile einfügen">+Zeile</TbBtn>
+        <TbBtn onClick={props.onDeleteRow} disabled={dis} label="Zeile löschen" danger>−Zeile</TbBtn>
+        <TbBtn onClick={props.onInsertCol} disabled={dis} label="Spalte einfügen">+Spalte</TbBtn>
+        <TbBtn onClick={props.onDeleteCol} disabled={dis} label="Spalte löschen" danger>−Spalte</TbBtn>
       </div>
     </div>
   );
@@ -647,6 +661,7 @@ const Divider = () => <span className="w-px h-5 bg-[var(--card-border)]" aria-hi
 
 function GridTable({
   grid,
+  compact,
   sel,
   anchor,
   editing,
@@ -658,6 +673,7 @@ function GridTable({
   onCellKeyDown,
 }: {
   grid: Grid;
+  compact: boolean;
   sel: Range | null;
   anchor: { r: number; c: number } | null;
   editing: { r: number; c: number; value: string } | null;
@@ -680,12 +696,23 @@ function GridTable({
   const rows = Array.from({ length: grid.max_row }, (_, i) => i + 1);
   const cols = Array.from({ length: grid.max_col }, (_, i) => i + 1);
 
+  // Auf Mobil Spalten schmaler skalieren und deckeln, damit das Raster aufs Display passt
+  const colW = (c: number) => {
+    const w = colWidthPx(grid.col_widths[c], grid.default_col_width);
+    return compact ? Math.max(30, Math.min(150, Math.round(w * 0.58))) : w;
+  };
+  const rowH = (r: number) => {
+    const h = rowHeightPx(grid.row_heights[r], grid.default_row_height);
+    return compact ? Math.max(20, Math.round(h * 0.78)) : h;
+  };
+  const gutter = compact ? 28 : 44;
+
   return (
     <table className="border-separate border-spacing-0 select-none" style={{ tableLayout: "fixed" }}>
       <colgroup>
-        <col style={{ width: 44 }} />
+        <col style={{ width: gutter }} />
         {cols.map((c) => (
-          <col key={c} style={{ width: colWidthPx(grid.col_widths[c], grid.default_col_width) }} />
+          <col key={c} style={{ width: colW(c) }} />
         ))}
       </colgroup>
       <thead>
@@ -703,7 +730,7 @@ function GridTable({
       </thead>
       <tbody>
         {rows.map((r) => (
-          <tr key={r} style={{ height: rowHeightPx(grid.row_heights[r], grid.default_row_height) }}>
+          <tr key={r} style={{ height: rowH(r) }}>
             <th
               className={`godi-rowhead sticky left-0 z-10 ${sel && r >= sel.r1 && r <= sel.r2 ? "godi-head-active" : ""}`}
             >
