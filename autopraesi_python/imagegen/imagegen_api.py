@@ -58,15 +58,23 @@ MAX_AGE_HOURS = int(os.environ.get("IMG_MAX_AGE_HOURS", "48"))
 # WICHTIG: keine Wörter wie "slide"/"text"/"title" im POSITIV-Prompt – sie verleiten das
 # Modell dazu, Schrift ins Bild zu zeichnen. Der Folientitel/Datum/Vers wird später von der
 # Präsentation ÜBER das Bild gelegt, gehört also NICHT ins generierte Bild.
-# Emotional/evokativ formuliert, da die Bilder "mehr Emotionen" haben sollen.
+#
+# Stil an den vorhandenen Gemeinde-Hintergrundbildern ausgerichtet (Ordner
+# /Gemeinde/Brüderrecords°/Hintergrundbilder): durchweg fotografische, wallpaper-artige
+# Motive – ruhige Natur (Felder, Wälder, Wasser, Himmel, Sonnenuntergänge), dezente
+# christliche Symbolik (Kreuz-Silhouette, aufgeschlagene Bibel, Kerzenlicht, betende Hände
+# von hinten), warmes Bokeh – fast immer ruhig komponiert mit freier Fläche für Text,
+# warmes/weiches Licht, emotional aber nicht kitschig.
 STYLE = (
-    "A deeply emotive, atmospheric photographic background scene with a Christian, reverent "
-    "and hopeful spirit. Moving and uplifting, full of warmth, tenderness and quiet awe. "
-    "Soft golden divine light, dramatic god rays breaking through clouds, rich warm color "
-    "and glow, gentle depth and soft bokeh. Serene yet emotionally powerful: sunrise over "
-    "mountains, calm glowing water, open fields, a subtle distant cross silhouette. "
-    "Cinematic lighting, fine-art photography, tasteful, dignified, evocative, high quality, "
-    "photorealistic."
+    "A professional, high-quality photographic background image for a Christian worship "
+    "setting, in the style of a clean cinematic widescreen wallpaper. Reverent, hopeful and "
+    "emotionally warm, with beautiful natural or divine light — golden hour, soft god rays, "
+    "gentle glow. Calm, uncluttered and well-balanced composition with a simple area of "
+    "negative space, so it works well as a background. Tasteful subjects such as serene "
+    "landscapes, golden fields, misty forests, calm water, dramatic skies and sunsets, or "
+    "quiet Christian symbolism like a distant cross silhouette, an open Bible or candlelight. "
+    "Fine-art photography, shallow depth of field and soft bokeh, rich but natural color, "
+    "dignified, evocative, photorealistic."
 )
 # Schrift hart ausschließen (Negation funktioniert im Negativ-Prompt zuverlässiger als im Positiv).
 NEGATIVE = (
