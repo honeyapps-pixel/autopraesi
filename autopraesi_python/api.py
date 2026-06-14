@@ -38,6 +38,26 @@ app.add_middleware(
 # Song-Index einmalig bauen und cachen
 _song_index = None
 
+# Datei-Cache für den GoDi-Plan-Editor: vermeidet wiederholte Dropbox-Downloads
+# beim Mappenwechsel. Schlüssel = Pfad, Wert = (rev, bytes). Über die Dropbox-rev
+# wird der Cache automatisch ungültig, sobald sich die Datei ändert.
+_godi_file_cache: dict[str, tuple] = {}
+
+
+def _godi_get_bytes(path: str) -> tuple[Optional[str], bytes]:
+    """Liefert (rev, bytes) der Datei – aus dem Cache, falls die rev unverändert ist.
+
+    Die rev-Abfrage ist ein kleiner Metadaten-Aufruf; der eigentliche (große)
+    Download passiert nur beim ersten Mal bzw. nach einer Änderung.
+    """
+    rev = storage.get_rev(path)
+    ent = _godi_file_cache.get(path)
+    if ent and rev is not None and ent[0] == rev:
+        return rev, ent[1]
+    data = storage.download_bytes(path)
+    _godi_file_cache[path] = (rev, data)
+    return rev, data
+
 
 def _get_song_index():
     global _song_index
@@ -430,7 +450,8 @@ def godi_files():
 def godi_sheets(excel_path: str):
     """Alle Tabellenblätter (Mappen / Sonntage) einer Excel-Datei – in Originalreihenfolge."""
     skip = {"Überblick", "GoDi-Vorlage", "Nächsten GoDis im nächsten Plan"}
-    names = godi_editor.list_sheets(storage.download_bytes(excel_path))
+    _rev, data = _godi_get_bytes(excel_path)
+    names = godi_editor.list_sheets(data)
     return [{"name": n, "is_helper": n in skip} for n in names]
 
 
@@ -457,10 +478,11 @@ def godi_upcoming_sunday():
 @app.get("/api/godi/grid")
 def godi_grid(excel_path: str, sheet: str):
     """Liefert ein komplettes Tabellenblatt als Raster (Werte + Ansicht)."""
-    grid = godi_editor.read_grid(storage.download_bytes(excel_path), sheet)
+    rev, data = _godi_get_bytes(excel_path)
+    grid = godi_editor.read_grid(data, sheet)
     if grid is None:
         raise HTTPException(404, f"Blatt '{sheet}' nicht gefunden in {excel_path}")
-    grid["rev"] = storage.get_rev(excel_path)
+    grid["rev"] = rev
     return grid
 
 
@@ -506,11 +528,15 @@ def godi_save(req: GodiSaveRequest):
     storage.upload_bytes(new_bytes, req.excel_path)
     log.info(f"GoDi-Plan gespeichert: {req.excel_path} ({len(req.operations)} Operationen)")
 
+    # Cache mit den frisch gespeicherten Bytes + neuer rev aktualisieren
+    new_rev = storage.get_rev(req.excel_path)
+    _godi_file_cache[req.excel_path] = (new_rev, new_bytes)
+
     return {
         "success": True,
         "changed": len(req.operations),
         "backup": backup_path,
-        "rev": storage.get_rev(req.excel_path),
+        "rev": new_rev,
     }
 
 

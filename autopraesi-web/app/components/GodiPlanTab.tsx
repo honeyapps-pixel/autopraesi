@@ -423,9 +423,12 @@ export default function GodiPlanTab() {
       )}
 
       {/* Raster */}
+      <div className="relative mt-3">
       <div
         ref={gridScrollRef}
-        className="godi-grid-scroll mt-3 overflow-auto rounded-xl border border-[var(--card-border)] bg-white shadow-sm"
+        className={`godi-grid-scroll overflow-auto rounded-xl border border-[var(--card-border)] bg-white shadow-sm transition-opacity duration-150 ${
+          loading ? "opacity-40" : "opacity-100"
+        }`}
         style={{ maxHeight: "calc(100dvh - 230px)" }}
       >
         {grid && (
@@ -448,6 +451,15 @@ export default function GodiPlanTab() {
             onCellKeyDown={onCellKeyDown}
           />
         )}
+      </div>
+      {loading && grid && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center rounded-xl">
+          <div className="flex items-center gap-2.5 rounded-full bg-white/90 px-4 py-2 shadow-md border border-[var(--card-border)]">
+            <span className="inline-block w-4 h-4 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm text-[var(--text-secondary)]">Lade Mappe…</span>
+          </div>
+        </div>
+      )}
       </div>
 
       {/* Mappen-Tabs (Sonntage) – wie in Excel unten */}
