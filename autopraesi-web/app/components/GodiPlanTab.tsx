@@ -187,6 +187,18 @@ export default function GodiPlanTab() {
     return () => mq.removeEventListener("change", update);
   }, []);
 
+  // Verfügbare Rasterbreite messen (für „ganze Tabelle auf einen Blick" am Desktop)
+  const [containerW, setContainerW] = useState(0);
+  useEffect(() => {
+    const el = gridScrollRef.current;
+    if (!el) return;
+    const update = () => setContainerW(el.clientWidth);
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    update();
+    return () => ro.disconnect();
+  }, [grid]);
+
   // --- Initial: kommender Sonntag + Datei-Liste ---
   useEffect(() => {
     let cancelled = false;
@@ -444,6 +456,7 @@ export default function GodiPlanTab() {
           <GridTable
             grid={grid}
             compact={compact}
+            containerW={containerW}
             sel={sel}
             anchor={anchor}
             editing={editing}
@@ -662,6 +675,7 @@ const Divider = () => <span className="w-px h-5 bg-[var(--card-border)]" aria-hi
 function GridTable({
   grid,
   compact,
+  containerW,
   sel,
   anchor,
   editing,
@@ -674,6 +688,7 @@ function GridTable({
 }: {
   grid: Grid;
   compact: boolean;
+  containerW: number;
   sel: Range | null;
   anchor: { r: number; c: number } | null;
   editing: { r: number; c: number; value: string } | null;
@@ -707,8 +722,21 @@ function GridTable({
   };
   const gutter = compact ? 28 : 44;
 
+  // Fit-to-Width (Desktop): das Raster so weit herunterzoomen, dass alle Spalten
+  // ohne horizontales Scrollen sichtbar sind. `zoom` skaliert alles proportional
+  // (Breiten, Schrift, Höhen) und erhält dabei Layout + Sticky-Header.
+  let naturalW = gutter;
+  for (const c of cols) naturalW += colW(c);
+  const fitZoom =
+    !compact && containerW > 0 && naturalW > containerW
+      ? Math.max(0.4, (containerW - 2) / naturalW)
+      : 1;
+
   return (
-    <table className="border-separate border-spacing-0 select-none" style={{ tableLayout: "fixed" }}>
+    <table
+      className="border-separate border-spacing-0 select-none"
+      style={{ tableLayout: "fixed", zoom: fitZoom }}
+    >
       <colgroup>
         <col style={{ width: gutter }} />
         {cols.map((c) => (
