@@ -16,10 +16,12 @@ import datetime
 import io
 import logging
 import re
+import zipfile
 from typing import Optional
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles.colors import COLOR_INDEX
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 log = logging.getLogger(__name__)
@@ -47,23 +49,50 @@ def list_sheets(file_bytes: bytes) -> list[str]:
     return names
 
 
-def _color_hex(color) -> Optional[str]:
-    """Wandelt eine openpyxl-Farbe in '#RRGGBB' um (nur explizite RGB-Farben).
+def _build_indexed_palette(file_bytes: bytes) -> list[str]:
+    """Liest die (oft eigene) Index-Farbpalette der Arbeitsmappe aus styles.xml.
 
-    Theme-/Indexfarben werden übersprungen (None), da ihre Umrechnung unzuverlässig
-    ist; die GoDi-Pläne nutzen durchgängig explizite RGB-Füllungen.
+    Excel/LibreOffice speichern Zellfarben häufig als *indexed colors*, die auf eine
+    in der Datei definierte Palette zeigen (``<indexedColors>``). Fehlt sie, gilt die
+    Standard-Palette von openpyxl.
+    """
+    try:
+        z = zipfile.ZipFile(io.BytesIO(file_bytes))
+        styles = z.read("xl/styles.xml").decode("utf-8", "ignore")
+        m = re.search(r"<indexedColors>(.*?)</indexedColors>", styles, re.S)
+        if m:
+            cols = re.findall(r'rgb="([0-9A-Fa-f]{8})"', m.group(1))
+            if cols:
+                return cols
+    except Exception as e:
+        log.warning(f"Index-Palette konnte nicht gelesen werden: {e}")
+    return list(COLOR_INDEX)
+
+
+def _color_hex(color, palette: list[str]) -> Optional[str]:
+    """Wandelt eine openpyxl-Farbe (rgb oder indexed) in '#RRGGBB' um.
+
+    Theme-Farben werden (mangels zuverlässiger Umrechnung) übersprungen.
     """
     if color is None:
         return None
-    if getattr(color, "type", None) != "rgb":
+    t = getattr(color, "type", None)
+    arr: Optional[str] = None
+    if t == "rgb":
+        rgb = color.rgb
+        if isinstance(rgb, str) and len(rgb) == 8:
+            # rein transparentes Schwarz = "keine Farbe"
+            if rgb == "00000000":
+                return None
+            arr = rgb
+    elif t == "indexed":
+        idx = color.indexed
+        # 64/65 sind System-Vorder-/Hintergrund (auto) → als Standard behandeln
+        if isinstance(idx, int) and 0 <= idx < len(palette):
+            arr = palette[idx]
+    if not arr or len(arr) < 6:
         return None
-    rgb = color.rgb
-    if not isinstance(rgb, str) or len(rgb) != 8:
-        return None
-    # Transparent ignorieren
-    if rgb in ("00000000",):
-        return None
-    return "#" + rgb[2:].upper()
+    return "#" + arr[-6:].upper()
 
 
 def _format_value(cell) -> str:
@@ -96,6 +125,7 @@ def read_grid(file_bytes: bytes, sheet_name: str) -> Optional[dict]:
         wb.close()
         return None
 
+    palette = _build_indexed_palette(file_bytes)
     max_row = max(ws.max_row, 1)
     max_col = max(ws.max_column, 1)
 
@@ -134,13 +164,13 @@ def read_grid(file_bytes: bytes, sheet_name: str) -> Optional[dict]:
                     style["i"] = True
                 if font.size and font.size != 11:
                     style["sz"] = float(font.size)
-                fg = _color_hex(font.color)
+                fg = _color_hex(font.color, palette)
                 if fg and fg != "#000000":
                     style["fg"] = fg
 
             if cell.fill and cell.fill.patternType == "solid":
-                bg = _color_hex(cell.fill.fgColor)
-                if bg:
+                bg = _color_hex(cell.fill.fgColor, palette)
+                if bg and bg != "#FFFFFF":
                     style["bg"] = bg
 
             align = cell.alignment
