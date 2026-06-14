@@ -29,15 +29,12 @@ import {
   getCurrentQuarter,
   getSections,
   getSheetData,
-  getSheetRows,
   generate,
   uploadImage,
   uploadExcel,
   searchSong,
   downloadUrl,
-  imagePreviewUrl,
   fetchImageAsBlob,
-  ExcelRow,
   GenerateResult,
 } from "@/lib/api";
 
@@ -207,94 +204,6 @@ function SlidePreview({
         shadowStrength={shadowStrength}
         textOutline={textOutline}
       />
-    </div>
-  );
-}
-
-// --- Excel Table (shared) ---
-function ExcelTable({ rows }: { rows: ExcelRow[] }) {
-  return (
-    <table className="w-full text-sm">
-      <thead>
-        <tr className="text-[10px] uppercase tracking-wider text-[var(--text-secondary)] border-b border-[var(--card-border)]">
-          <th className="text-left py-1.5 px-2 w-14">Zeit</th>
-          <th className="text-left py-1.5 px-2">Programm</th>
-          <th className="text-left py-1.5 px-2">Details</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.row} className="border-b border-[var(--card-border)]/30 even:bg-white/30">
-            <td className="py-1 px-2 text-[11px] font-mono text-[var(--text-secondary)] whitespace-nowrap">{r.uhrzeit}</td>
-            <td className="py-1 px-2 text-xs font-medium">{r.programmpunkt}</td>
-            <td className="py-1 px-2 text-[11px] text-[var(--text-secondary)] max-w-[180px] truncate">{r.details}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-// --- Mobile Excel Card ---
-function MobileExcelCard({ rows, loading, open, onToggle }: {
-  rows: ExcelRow[]; loading: boolean; open: boolean; onToggle: () => void;
-}) {
-  return (
-    <div className="glass-card mb-4 md:hidden">
-      <button type="button" onClick={onToggle} className="w-full flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-          GoDi-Plan (Excel)
-        </h3>
-        <svg
-          width="16" height="16" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-          className={`text-[var(--text-secondary)] transition-transform duration-200 ${open ? "rotate-180" : ""}`}
-        >
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
-      </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
-            <div className="mt-3 max-h-72 overflow-y-auto">
-              {loading ? (
-                <p className="text-xs text-[var(--text-secondary)] text-center py-4">Lade...</p>
-              ) : rows.length > 0 ? (
-                <ExcelTable rows={rows} />
-              ) : (
-                <p className="text-xs text-[var(--text-secondary)] text-center py-4">Keine Daten</p>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-// --- Desktop Excel Sidebar ---
-function ExcelSidebar({ rows, loading }: { rows: ExcelRow[]; loading: boolean }) {
-  return (
-    <div className="glass-card">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-3">
-        GoDi-Plan (Excel)
-      </h3>
-      {loading ? (
-        <div className="text-center py-8">
-          <div className="inline-block w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-[var(--text-secondary)] mt-2">Lade Excel-Daten...</p>
-        </div>
-      ) : rows.length > 0 ? (
-        <ExcelTable rows={rows} />
-      ) : (
-        <p className="text-xs text-[var(--text-secondary)] text-center py-8">Keine Daten</p>
-      )}
     </div>
   );
 }
@@ -582,9 +491,6 @@ export default function PresentationTab() {
   const [textBanner, setTextBanner] = useState("none");
   const [shadowStrength, setShadowStrength] = useState("normal");
   const [textOutline, setTextOutline] = useState(false);
-  const [excelRows, setExcelRows] = useState<ExcelRow[]>([]);
-  const [excelLoading, setExcelLoading] = useState(false);
-  const [excelOpen, setExcelOpen] = useState(false);
   const [quarterPattern, setQuarterPattern] = useState<string>("");
   const [showAllQuarters, setShowAllQuarters] = useState(false);
   // Layout-Positionen in % der Folie (aus PowerPoint: 9144000 x 6858000 EMU)
@@ -638,19 +544,11 @@ export default function PresentationTab() {
       setTextOutline(false);
       setTitleLayout({ x: 6.9, y: 2.6, w: 86.2, h: 31.5, fontSize: 6.6 });
       setSubtitleLayout({ x: 10.6, y: 83.7, w: 78.9, h: 10.1, fontSize: 2.8 });
-      setExcelRows([]);
-      setExcelOpen(false);
       const defaults: Record<string, boolean> = {};
       sections.forEach((s) => (defaults[s.key] = s.default_enabled));
       setSectionToggles(defaults);
       setSectionOrder(sections.map((s) => s.key));
       setLoading(true);
-      setExcelLoading(true);
-      // Parallel laden
-      getSheetRows(sheet.name, sheet.excel_path)
-        .then(setExcelRows)
-        .catch(() => {})
-        .finally(() => setExcelLoading(false));
       try {
         const d = await getSheetData(sheet.name, sheet.excel_path);
         setData(d);
@@ -935,8 +833,7 @@ export default function PresentationTab() {
     .filter((s): s is SectionInfo => !!s);
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 sm:py-10 md:flex md:gap-6">
-    <div className="flex-1 max-w-2xl min-w-0">
+    <div className="max-w-2xl mx-auto px-4 py-6 sm:py-10 min-w-0">
       {/* Header */}
       <header className="mb-8">
         {(() => {
@@ -1010,11 +907,6 @@ export default function PresentationTab() {
           </div>
         </label>
       </header>
-
-      {/* Mobile Excel Preview */}
-      {selected && data && !loading && (
-        <MobileExcelCard rows={excelRows} loading={excelLoading} open={excelOpen} onToggle={() => setExcelOpen((o) => !o)} />
-      )}
 
       {/* Loading */}
       {loading && (
@@ -1434,16 +1326,6 @@ export default function PresentationTab() {
           </p>
         </div>
       )}
-    </div>
-
-    {/* Desktop Excel Sidebar */}
-    {selected && data && !loading && (
-      <aside className="hidden md:block w-80 lg:w-96 shrink-0">
-        <div className="sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto rounded-2xl">
-          <ExcelSidebar rows={excelRows} loading={excelLoading} />
-        </div>
-      </aside>
-    )}
     </div>
   );
 }
