@@ -4,21 +4,25 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import PresentationTab from "./components/PresentationTab";
 import GodiPlanTab from "./components/GodiPlanTab";
+import BilderTab from "./components/BilderTab";
 
-type Tab = "praesi" | "godi";
+type Tab = "praesi" | "godi" | "bilder";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "praesi", label: "Präsentation" },
   { id: "godi", label: "GoDi-Plan" },
+  { id: "bilder", label: "Bilder generieren" },
 ];
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("praesi");
-  // GoDi-Reiter erst beim ersten Öffnen laden, danach montiert lassen (Zustand bleibt erhalten)
+  // GoDi- und Bilder-Reiter erst beim ersten Öffnen laden, danach montiert lassen.
   const [godiSeen, setGodiSeen] = useState(false);
+  const [bilderSeen, setBilderSeen] = useState(false);
 
   const openTab = (id: Tab) => {
     if (id === "godi") setGodiSeen(true);
+    if (id === "bilder") setBilderSeen(true);
     setTab(id);
   };
 
@@ -74,6 +78,13 @@ export default function Home() {
       {godiSeen && (
         <div className={tab === "godi" ? "" : "hidden"}>
           <GodiPlanTab />
+        </div>
+      )}
+
+      {/* Bilder-Reiter (lazy beim ersten Öffnen) */}
+      {bilderSeen && (
+        <div className={tab === "bilder" ? "" : "hidden"}>
+          <BilderTab />
         </div>
       )}
     </div>

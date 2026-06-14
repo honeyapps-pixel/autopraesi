@@ -173,6 +173,23 @@ export async function fetchImageAsBlob(imagePath: string): Promise<string> {
   return URL.createObjectURL(blob);
 }
 
+/**
+ * Speichert das bestätigte Hintergrundbild über das Cloud-Backend in Dropbox.
+ * Das Backend benennt es als "Bild DD.MM.jpg" (aus dateStr), damit die
+ * Folien-Vorschau im Präsentations-Reiter es automatisch findet.
+ */
+export async function saveSundayImage(blob: Blob, dateStr: string): Promise<{ path: string; name: string }> {
+  const form = new FormData();
+  form.append("file", blob, "bild.jpg");
+  form.append("date_str", dateStr);
+  const res = await postForm(`${API}/api/save-sunday-image`, form);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Speichern fehlgeschlagen" }));
+    throw new Error(err.detail || "Speichern fehlgeschlagen");
+  }
+  return res.json();
+}
+
 export async function uploadExcel(file: File): Promise<{ path: string; filename: string }> {
   const form = new FormData();
   form.append("file", file);

@@ -9,7 +9,7 @@ from typing import Optional
 from urllib.parse import quote
 
 import openpyxl
-from fastapi import FastAPI, UploadFile, File, HTTPException, Response
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -282,6 +282,28 @@ async def upload_image(file: UploadFile = File(...)):
     dest = f"{IMAGE_DIR}/_uploads/{filename}"
     storage.upload_bytes(content, dest)
     return {"path": dest, "filename": filename}
+
+
+@app.post("/api/save-sunday-image")
+async def save_sunday_image(file: UploadFile = File(...), date_str: str = Form(...)):
+    """Speichert das bestätigte (KI-)Hintergrundbild als 'Bild DD.MM.jpg' in Dropbox.
+
+    Der Name folgt exakt der Konvention von ``_find_image`` (Tag/Monat aus ``date_str``,
+    zweistellig wie in der Excel: "08.03.2026" → "Bild 08.03.jpg"), damit die Folien-Vorschau
+    im Präsentations-Reiter das Bild automatisch erkennt. Das Bild kommt bereits als JPEG
+    (vom Browser per Canvas konvertiert).
+    """
+    parts = date_str.split(".")
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise HTTPException(400, f"Ungültiges Datum: '{date_str}' (erwartet z.B. 08.03.2026)")
+    name = f"Bild {parts[0]}.{parts[1]}.jpg"
+    dest = f"{IMAGE_DIR}/{name}"
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Leere Datei")
+    storage.upload_bytes(content, dest)
+    log.info(f"Sonntags-Bild gespeichert: {dest} ({len(content)} Bytes)")
+    return {"path": dest, "name": name}
 
 
 @app.post("/api/generate")
