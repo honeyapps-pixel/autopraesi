@@ -55,32 +55,44 @@ MAX_AGE_HOURS = int(os.environ.get("IMG_MAX_AGE_HOURS", "48"))
 # atmosphärisch/symbolisch statt figürlich (KI-Gesichter/Jesus-Darstellungen
 # wirken oft unschön). Ruhige Komposition mit Freiraum, da Titel/Datum später
 # über das Bild gelegt werden.
+# WICHTIG: keine Wörter wie "slide"/"text"/"title" im POSITIV-Prompt – sie verleiten das
+# Modell dazu, Schrift ins Bild zu zeichnen. Der Folientitel/Datum/Vers wird später von der
+# Präsentation ÜBER das Bild gelegt, gehört also NICHT ins generierte Bild.
 STYLE = (
-    "Background image for a Christian worship service slide. "
-    "Reverent, peaceful, uplifting atmosphere. Soft natural or divine light, "
-    "gentle depth, calm and uncluttered composition with empty negative space for "
-    "overlaid text. Atmospheric and symbolic rather than literal: light through clouds, "
-    "sunrise over mountains, calm water, open fields, a subtle distant cross silhouette, "
-    "soft bokeh. Fine-art, cinematic lighting, tasteful and dignified, high quality, "
-    "photorealistic or softly painterly."
+    "A serene photographic background scene with a Christian, reverent, peaceful and "
+    "uplifting mood. Soft natural or divine light, gentle depth, calm and uncluttered "
+    "composition with generous open sky and empty areas. Atmospheric and symbolic rather "
+    "than literal: light breaking through clouds, sunrise over mountains, calm water, open "
+    "fields, a subtle distant cross silhouette, soft bokeh. Fine-art, cinematic lighting, "
+    "tasteful and dignified, high quality, photorealistic."
 )
+# Schrift hart ausschließen (Negation funktioniert im Negativ-Prompt zuverlässiger als im Positiv).
 NEGATIVE = (
-    "text, words, letters, captions, watermark, logo, signature, frame, border, "
+    "text, words, letters, captions, title, heading, subtitle, typography, font, writing, "
+    "handwriting, inscription, signage, sign, banner, poster, label, watermark, logo, "
+    "signature, numbers, frame, border, "
     "human face, portrait, people close-up, deformed hands, kitsch, cartoon, anime, "
     "low quality, blurry, cluttered, busy composition, oversaturated"
 )
 
 
 def _build_prompt(theme: str, wochenspruch: str, freitext: str) -> str:
-    """Setzt den finalen Prompt zusammen (höchstes Gewicht zuerst: Freitext)."""
+    """Baut den Bildprompt – als reine SZENEN-Beschreibung, ohne renderbaren Text.
+
+    Thema und Wochenspruch fließen NUR als knappe Stimmung/Atmosphäre ein (kein wörtliches
+    Zitat), damit das Modell sie nicht als Schrift ins Bild malt. Der eigentliche Text liegt
+    später als Overlay auf der Folie.
+    """
     parts: list[str] = []
     if freitext and freitext.strip():
         parts.append(freitext.strip())
+    # Thema nur als kurzes Stimmungs-Stichwort (kein Doppelpunkt/Anführungszeichen → seltener
+    # als Titel gerendert). Lange Verstexte bewusst NICHT in den Prompt (würden gezeichnet).
     if theme and theme.strip():
-        parts.append(f"Theme of the service: {theme.strip()}")
-    if wochenspruch and wochenspruch.strip():
-        parts.append(f"Inspired by the weekly Bible verse: {wochenspruch.strip()}")
+        parts.append(f"evoking the mood of {theme.strip()}")
     parts.append(STYLE)
+    # Bewusst KEIN "no text" im Positiv-Prompt – Negationen werden dort schlecht verstanden
+    # und führen eher zu Schrift. Textausschluss passiert über NEGATIVE.
     return ". ".join(parts)
 
 
