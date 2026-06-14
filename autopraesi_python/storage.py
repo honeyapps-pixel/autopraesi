@@ -161,3 +161,33 @@ def file_exists(path: str) -> bool:
         return True
     except ApiError:
         return False
+
+
+def get_rev(path: str) -> Optional[str]:
+    """Gibt die Dropbox-Revision (``rev``) einer Datei zurück, oder None.
+
+    Die ``rev`` ändert sich bei jeder Änderung der Datei. Wird genutzt, um vor
+    dem Überschreiben zu erkennen, ob die Datei zwischenzeitlich (z.B. im
+    Dropbox-Desktop) bearbeitet wurde.
+    """
+    from dropbox.files import FileMetadata
+
+    dbx = get_client()
+    try:
+        meta = _with_retry(dbx.files_get_metadata, path)
+        if isinstance(meta, FileMetadata):
+            return meta.rev
+    except ApiError:
+        pass
+    return None
+
+
+def copy_file(from_path: str, to_path: str) -> None:
+    """Kopiert eine Datei innerhalb von Dropbox (server-seitig, ohne Download).
+
+    Genutzt für das automatische Backup vor dem Überschreiben einer GoDi-Plan
+    Excel. Legt fehlende Zielordner automatisch an.
+    """
+    dbx = get_client()
+    _with_retry(dbx.files_copy_v2, from_path, to_path, autorename=True)
+    log.info(f"Dropbox-Kopie erstellt: {from_path} → {to_path}")

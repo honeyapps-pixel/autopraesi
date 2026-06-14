@@ -16,9 +16,11 @@ from pydantic import BaseModel
 import storage
 from config import (IMAGE_DIR, OUTPUT_DIR_DROPBOX, GODI_PLAN_DIR,
                     TOGGLEABLE_SECTIONS, DEFAULT_SECTION_ORDER)
-from excel_reader import list_all_sheets, read_godi_plan_by_sheet, GodiPlanData, parse_song_entry
+from excel_reader import (list_all_sheets, read_godi_plan_by_sheet, GodiPlanData,
+                          parse_song_entry, find_godi_plan_excel, _is_godi_plan)
 from song_finder import build_song_index, find_song
 from presentation_builder import build_presentation
+import godi_editor
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -394,6 +396,122 @@ async def upload_excel(file: UploadFile = File(...)):
     storage.upload_bytes(content, dest)
     log.info(f"Excel hochgeladen: {dest}")
     return {"success": True, "path": dest, "filename": file.filename}
+
+
+# ===================================================================
+# GoDi-Plan Editor – die ganze Excel als editierbares Raster ("Reiter")
+# ===================================================================
+
+class GodiSaveRequest(BaseModel):
+    excel_path: str
+    sheet: str
+    operations: list[dict]
+    base_rev: Optional[str] = None  # Dropbox-rev beim Laden (Konflikt-Erkennung)
+
+
+@app.get("/api/godi/files")
+def godi_files():
+    """Alle GoDi-Plan Excel-Dateien in Dropbox (Name, Pfad, aktuelles-Quartal-Flag)."""
+    pattern = _current_quarter_pattern()
+    files = []
+    for name, path in storage.list_files(GODI_PLAN_DIR, suffix=".xlsx"):
+        if not _is_godi_plan(name):
+            continue
+        files.append({
+            "name": name,
+            "excel_path": path,
+            "is_current_quarter": pattern in path,
+        })
+    files.sort(key=lambda f: f["name"])
+    return files
+
+
+@app.get("/api/godi/sheets")
+def godi_sheets(excel_path: str):
+    """Alle Tabellenblätter (Mappen / Sonntage) einer Excel-Datei – in Originalreihenfolge."""
+    skip = {"Überblick", "GoDi-Vorlage", "Nächsten GoDis im nächsten Plan"}
+    names = godi_editor.list_sheets(storage.download_bytes(excel_path))
+    return [{"name": n, "is_helper": n in skip} for n in names]
+
+
+@app.get("/api/godi/upcoming-sunday")
+def godi_upcoming_sunday():
+    """Ermittelt die Datei + Mappe für den kommenden Sonntag dieser Woche.
+
+    Ist heute Sonntag, zählt heute. Gibt {excel_path, sheet} zurück oder
+    {excel_path: null} wenn keine passende Mappe gefunden wurde.
+    """
+    import datetime
+    today = datetime.date.today()
+    days_until_sunday = (6 - today.weekday()) % 7  # Montag=0 … Sonntag=6
+    sunday = today + datetime.timedelta(days=days_until_sunday)
+    sheet_name = f"So {sunday.day}.{sunday.month}"
+    excel_path = find_godi_plan_excel(sunday)
+    return {
+        "excel_path": excel_path,
+        "sheet": sheet_name if excel_path else None,
+        "date": sunday.isoformat(),
+    }
+
+
+@app.get("/api/godi/grid")
+def godi_grid(excel_path: str, sheet: str):
+    """Liefert ein komplettes Tabellenblatt als Raster (Werte + Ansicht)."""
+    grid = godi_editor.read_grid(storage.download_bytes(excel_path), sheet)
+    if grid is None:
+        raise HTTPException(404, f"Blatt '{sheet}' nicht gefunden in {excel_path}")
+    grid["rev"] = storage.get_rev(excel_path)
+    return grid
+
+
+@app.post("/api/godi/save")
+def godi_save(req: GodiSaveRequest):
+    """Wendet Bearbeitungen an und schreibt die Excel zurück nach Dropbox.
+
+    Schritte: Konfliktprüfung (rev) → Auto-Backup → Operationen anwenden → Upload.
+    """
+    if not req.operations:
+        return {"success": True, "changed": 0, "rev": storage.get_rev(req.excel_path)}
+
+    # Konflikt-Erkennung: wurde die Datei seit dem Laden verändert?
+    current_rev = storage.get_rev(req.excel_path)
+    if req.base_rev and current_rev and req.base_rev != current_rev:
+        raise HTTPException(
+            409,
+            "Die Datei wurde seit dem Öffnen geändert (z.B. im Dropbox-Desktop). "
+            "Bitte den Reiter neu laden, damit deine Änderungen nichts überschreiben.",
+        )
+
+    file_bytes = storage.download_bytes(req.excel_path)
+
+    # Auto-Backup der unveränderten Datei (Sicherheitsnetz)
+    import datetime
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    base_name = req.excel_path.split("/")[-1].rsplit(".", 1)[0]
+    backup_path = f"{GODI_PLAN_DIR}/_backups/{base_name}_{stamp}.xlsx"
+    try:
+        storage.copy_file(req.excel_path, backup_path)
+    except Exception as e:
+        log.warning(f"Backup fehlgeschlagen (fahre fort): {e}")
+        backup_path = None
+
+    try:
+        new_bytes = godi_editor.apply_operations(file_bytes, req.sheet, req.operations)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        log.error(f"Fehler beim Anwenden der Operationen: {e}", exc_info=True)
+        raise HTTPException(500, f"Bearbeitung fehlgeschlagen: {e}")
+
+    storage.upload_bytes(new_bytes, req.excel_path)
+    log.info(f"GoDi-Plan gespeichert: {req.excel_path} ({len(req.operations)} Operationen)")
+
+    return {
+        "success": True,
+        "changed": len(req.operations),
+        "backup": backup_path,
+        "rev": storage.get_rev(req.excel_path),
+    }
 
 
 @app.post("/api/refresh-songs")

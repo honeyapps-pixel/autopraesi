@@ -30,3 +30,7 @@ node_modules/
 # Temp
 *.log
 nohup.out
+
+# Design-Skills (lokal via npx skills installiert)
+.agents/
+skills-lock.json
