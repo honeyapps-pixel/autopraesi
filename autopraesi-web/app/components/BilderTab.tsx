@@ -16,18 +16,17 @@ import {
   regenerate as regenImage,
   deleteImage as delImage,
   pollStatus,
-  imageUrl,
+  fetchImageObjectUrl,
   health as genHealth,
-  getImagegenBase,
-  setImagegenBase,
 } from "@/lib/imagegen";
 
-/** Lädt ein Kandidaten-PNG und konvertiert es im Browser nach JPEG (für den Upload). */
-async function pngUrlToJpegBlob(url: string): Promise<Blob> {
-  const res = await fetch(url, { cache: "no-store" });
+type Candidate = GenImage & { objectUrl?: string };
+
+/** Konvertiert eine (lokale blob:) Bild-URL im Browser nach JPEG – für den Upload. */
+async function objectUrlToJpegBlob(url: string): Promise<Blob> {
+  const res = await fetch(url);
   if (!res.ok) throw new Error("Bild konnte nicht geladen werden");
-  const pngBlob = await res.blob();
-  const bitmap = await createImageBitmap(pngBlob);
+  const bitmap = await createImageBitmap(await res.blob());
   const canvas = document.createElement("canvas");
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
@@ -57,25 +56,29 @@ export default function BilderTab() {
   const [dateStr, setDateStr] = useState("");
 
   const [count, setCount] = useState(2);
-  const [images, setImages] = useState<GenImage[]>([]);
+  const [images, setImages] = useState<Candidate[]>([]);
   const [generating, setGenerating] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [savedName, setSavedName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingSheet, setLoadingSheet] = useState(false);
 
-  // Generator-URL (Tunnel) + Erreichbarkeit
-  const [genUrl, setGenUrl] = useState("");
+  // Generator-Erreichbarkeit
   const [online, setOnline] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    setGenUrl(getImagegenBase());
     getCurrentQuarter().then(setQuarterPattern).catch(() => {});
     getSheets().then(setSheets).catch((e) => setError(e.message));
   }, []);
 
   const checkHealth = useCallback(async () => {
-    setOnline(await genHealth());
+    setChecking(true);
+    try {
+      setOnline(await genHealth());
+    } finally {
+      setChecking(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -103,7 +106,7 @@ export default function BilderTab() {
 
   const promptInput = (): PromptInput => ({ theme, wochenspruch, freitext });
 
-  // Solange Bilder "pending" sind, regelmäßig den Status pollen (Generierung ~1 Min/Bild).
+  // Solange Bilder "pending" sind, regelmäßig den Status pollen (~1 Min/Bild).
   const pollKey = images.map((i) => `${i.id}:${i.status}`).join(",");
   useEffect(() => {
     const pendingIds = images.filter((i) => i.status === "pending").map((i) => i.id);
@@ -132,11 +135,19 @@ export default function BilderTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pollKey]);
 
-  const saveGenUrl = () => {
-    setImagegenBase(genUrl);
-    setOnline(null);
-    checkHealth();
-  };
+  // Fertige Bilder als Blob (mit ngrok-Header) laden und als Object-URL anzeigen.
+  const loadingBlobs = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    images.forEach((img) => {
+      if (img.status === "done" && !img.objectUrl && !loadingBlobs.current.has(img.id)) {
+        loadingBlobs.current.add(img.id);
+        fetchImageObjectUrl(img.id)
+          .then((url) => setImages((prev) => prev.map((x) => (x.id === img.id ? { ...x, objectUrl: url } : x))))
+          .catch(() => {})
+          .finally(() => loadingBlobs.current.delete(img.id));
+      }
+    });
+  }, [images]);
 
   const handleGenerate = async () => {
     setError(null);
@@ -153,24 +164,26 @@ export default function BilderTab() {
   };
 
   // „Bearbeiten": Kandidat mit aktuellem (ggf. geändertem) Prompt + neuem Seed neu erzeugen.
-  const handleRegenerate = async (img: GenImage) => {
+  const handleRegenerate = async (img: Candidate) => {
     setError(null);
     try {
       const fresh = await regenImage(promptInput());
+      if (img.objectUrl) URL.revokeObjectURL(img.objectUrl);
       delImage(img.id).catch(() => {});
-      setImages((prev) => prev.map((x) => (x.id === img.id ? fresh : x)));
+      setImages((prev) => prev.map((x) => (x.id === img.id ? (fresh as Candidate) : x)));
     } catch (e) {
       setError((e as Error).message);
     }
   };
 
-  const handleDelete = (img: GenImage) => {
+  const handleDelete = (img: Candidate) => {
+    if (img.objectUrl) URL.revokeObjectURL(img.objectUrl);
     setImages((prev) => prev.filter((x) => x.id !== img.id));
     delImage(img.id).catch(() => {});
   };
 
-  const handleConfirm = async (img: GenImage) => {
-    if (img.status !== "done") return;
+  const handleConfirm = async (img: Candidate) => {
+    if (img.status !== "done" || !img.objectUrl) return;
     if (!dateStr) {
       setError("Kein Datum – bitte zuerst einen Gottesdienst wählen.");
       return;
@@ -178,7 +191,7 @@ export default function BilderTab() {
     setError(null);
     setConfirmingId(img.id);
     try {
-      const jpeg = await pngUrlToJpegBlob(imageUrl(img));
+      const jpeg = await objectUrlToJpegBlob(img.objectUrl);
       const res = await saveSundayImage(jpeg, dateStr);
       setSavedName(res.name);
     } catch (e) {
@@ -196,35 +209,21 @@ export default function BilderTab() {
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 sm:py-10 min-w-0">
-      {/* Generator-Status / Tunnel-URL */}
-      <div className="glass-card mb-4">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-            Bild-Generator (Mac Mini)
-          </h3>
-          <span className="flex items-center gap-1.5 text-xs">
-            <span className={`status-dot ${online ? "found" : online === false ? "missing" : "empty"}`} />
-            {online === null ? "prüfe…" : online ? "erreichbar" : "nicht erreichbar"}
+      {/* Generator-Erreichbarkeit: nur Prüfen-Button + Meldung */}
+      <div className="flex items-center gap-3 mb-4">
+        <button
+          type="button"
+          onClick={checkHealth}
+          disabled={checking}
+          className="text-sm font-medium px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50"
+        >
+          {checking ? "Prüfe…" : "Generator prüfen"}
+        </button>
+        {online !== null && !checking && (
+          <span className="flex items-center gap-1.5 text-sm">
+            <span className={`status-dot ${online ? "found" : "missing"}`} />
+            {online ? "Generator erreichbar" : "Generator nicht erreichbar (läuft er auf dem Mac Mini?)"}
           </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            className="input-field flex-1 text-sm"
-            value={genUrl}
-            placeholder="https://…trycloudflare.com  (Tunnel-URL)"
-            onChange={(e) => setGenUrl(e.target.value)}
-          />
-          <button type="button" onClick={saveGenUrl} className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200">
-            Speichern
-          </button>
-          <button type="button" onClick={checkHealth} className="text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200">
-            Prüfen
-          </button>
-        </div>
-        {online === false && (
-          <p className="text-xs text-[var(--text-secondary)] mt-2">
-            Läuft <code>start-imagegen.sh</code> auf dem Mac Mini und ist die Tunnel-URL korrekt?
-          </p>
         )}
       </div>
 
@@ -314,7 +313,7 @@ export default function BilderTab() {
               </div>
             </div>
 
-            <button className="btn-primary" disabled={generating || online === false} onClick={handleGenerate}>
+            <button className="btn-primary" disabled={generating} onClick={handleGenerate}>
               {generating ? (
                 <span className="flex items-center justify-center gap-2">
                   <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -324,6 +323,9 @@ export default function BilderTab() {
                 `${count} Bild${count > 1 ? "er" : ""} generieren`
               )}
             </button>
+            <p className="text-xs text-[var(--text-secondary)]">
+              Generierung läuft lokal auf dem Mac Mini – ca. 1 Minute pro Bild.
+            </p>
           </div>
 
           {/* Kandidaten */}
@@ -335,17 +337,17 @@ export default function BilderTab() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {images.map((img) => {
                   const isConfirming = confirmingId === img.id;
-                  const pending = img.status === "pending";
+                  const pending = img.status === "pending" || (img.status === "done" && !img.objectUrl);
                   const failed = img.status === "error";
-                  const done = img.status === "done";
+                  const ready = img.status === "done" && !!img.objectUrl;
                   return (
                     <div key={img.id} className="space-y-2">
                       <div className="relative rounded-xl overflow-hidden border border-[var(--card-border)] bg-gray-50" style={{ aspectRatio: "4 / 3" }}>
-                        {done && (
+                        {ready && (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={imageUrl(img)} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                          <img src={img.objectUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
                         )}
-                        {pending && (
+                        {pending && !failed && (
                           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[var(--text-secondary)]">
                             <span className="inline-block w-6 h-6 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
                             <span className="text-xs">wird erzeugt… (~1 Min)</span>
@@ -365,7 +367,7 @@ export default function BilderTab() {
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          disabled={!done || isConfirming}
+                          disabled={!ready || isConfirming}
                           onClick={() => handleConfirm(img)}
                           className="flex-1 text-xs font-medium py-1.5 rounded-lg bg-[var(--success)] text-white hover:opacity-90 disabled:opacity-40"
                         >
@@ -373,7 +375,7 @@ export default function BilderTab() {
                         </button>
                         <button
                           type="button"
-                          disabled={pending || isConfirming}
+                          disabled={img.status === "pending" || isConfirming}
                           onClick={() => handleRegenerate(img)}
                           className="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-40"
                           title="Mit aktuellem Prompt neu erzeugen"
