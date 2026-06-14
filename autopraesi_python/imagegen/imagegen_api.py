@@ -58,13 +58,15 @@ MAX_AGE_HOURS = int(os.environ.get("IMG_MAX_AGE_HOURS", "48"))
 # WICHTIG: keine Wörter wie "slide"/"text"/"title" im POSITIV-Prompt – sie verleiten das
 # Modell dazu, Schrift ins Bild zu zeichnen. Der Folientitel/Datum/Vers wird später von der
 # Präsentation ÜBER das Bild gelegt, gehört also NICHT ins generierte Bild.
+# Emotional/evokativ formuliert, da die Bilder "mehr Emotionen" haben sollen.
 STYLE = (
-    "A serene photographic background scene with a Christian, reverent, peaceful and "
-    "uplifting mood. Soft natural or divine light, gentle depth, calm and uncluttered "
-    "composition with generous open sky and empty areas. Atmospheric and symbolic rather "
-    "than literal: light breaking through clouds, sunrise over mountains, calm water, open "
-    "fields, a subtle distant cross silhouette, soft bokeh. Fine-art, cinematic lighting, "
-    "tasteful and dignified, high quality, photorealistic."
+    "A deeply emotive, atmospheric photographic background scene with a Christian, reverent "
+    "and hopeful spirit. Moving and uplifting, full of warmth, tenderness and quiet awe. "
+    "Soft golden divine light, dramatic god rays breaking through clouds, rich warm color "
+    "and glow, gentle depth and soft bokeh. Serene yet emotionally powerful: sunrise over "
+    "mountains, calm glowing water, open fields, a subtle distant cross silhouette. "
+    "Cinematic lighting, fine-art photography, tasteful, dignified, evocative, high quality, "
+    "photorealistic."
 )
 # Schrift hart ausschließen (Negation funktioniert im Negativ-Prompt zuverlässiger als im Positiv).
 NEGATIVE = (
@@ -77,19 +79,16 @@ NEGATIVE = (
 
 
 def _build_prompt(theme: str, wochenspruch: str, freitext: str) -> str:
-    """Baut den Bildprompt – als reine SZENEN-Beschreibung, ohne renderbaren Text.
+    """Baut den Bildprompt – reine SZENEN-Beschreibung aus Freitext + Stil.
 
-    Thema und Wochenspruch fließen NUR als knappe Stimmung/Atmosphäre ein (kein wörtliches
-    Zitat), damit das Modell sie nicht als Schrift ins Bild malt. Der eigentliche Text liegt
-    später als Overlay auf der Folie.
+    Thema und Wochenspruch werden BEWUSST NICHT in den Bildprompt übernommen: kurze, slogan-
+    artige Phrasen (z.B. ein Thema) malt das Modell sonst manchmal als Titel ins Bild. Sie
+    dienen im Formular nur als Inspiration für den Freitext. Der eigentliche Text (Titel,
+    Datum, Vers) liegt später als Overlay auf der Folie – nicht im generierten Bild.
     """
     parts: list[str] = []
     if freitext and freitext.strip():
         parts.append(freitext.strip())
-    # Thema nur als kurzes Stimmungs-Stichwort (kein Doppelpunkt/Anführungszeichen → seltener
-    # als Titel gerendert). Lange Verstexte bewusst NICHT in den Prompt (würden gezeichnet).
-    if theme and theme.strip():
-        parts.append(f"evoking the mood of {theme.strip()}")
     parts.append(STYLE)
     # Bewusst KEIN "no text" im Positiv-Prompt – Negationen werden dort schlecht verstanden
     # und führen eher zu Schrift. Textausschluss passiert über NEGATIVE.
