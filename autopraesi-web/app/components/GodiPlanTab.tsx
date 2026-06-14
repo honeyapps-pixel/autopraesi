@@ -187,17 +187,6 @@ export default function GodiPlanTab() {
     return () => mq.removeEventListener("change", update);
   }, []);
 
-  // Verfügbare Rasterbreite messen (für „ganze Tabelle auf einen Blick" am Desktop)
-  const [containerW, setContainerW] = useState(0);
-  useEffect(() => {
-    const el = gridScrollRef.current;
-    if (!el) return;
-    const update = () => setContainerW(el.clientWidth);
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    update();
-    return () => ro.disconnect();
-  }, [grid]);
 
   // --- Initial: kommender Sonntag + Datei-Liste ---
   useEffect(() => {
@@ -456,7 +445,6 @@ export default function GodiPlanTab() {
           <GridTable
             grid={grid}
             compact={compact}
-            containerW={containerW}
             sel={sel}
             anchor={anchor}
             editing={editing}
@@ -675,7 +663,6 @@ const Divider = () => <span className="w-px h-5 bg-[var(--card-border)]" aria-hi
 function GridTable({
   grid,
   compact,
-  containerW,
   sel,
   anchor,
   editing,
@@ -688,7 +675,6 @@ function GridTable({
 }: {
   grid: Grid;
   compact: boolean;
-  containerW: number;
   sel: Range | null;
   anchor: { r: number; c: number } | null;
   editing: { r: number; c: number; value: string } | null;
@@ -711,37 +697,40 @@ function GridTable({
   const rows = Array.from({ length: grid.max_row }, (_, i) => i + 1);
   const cols = Array.from({ length: grid.max_col }, (_, i) => i + 1);
 
-  // Auf Mobil Spalten schmaler skalieren und deckeln, damit das Raster aufs Display passt
-  const colW = (c: number) => {
-    const w = colWidthPx(grid.col_widths[c], grid.default_col_width);
-    return compact ? Math.max(30, Math.min(150, Math.round(w * 0.58))) : w;
-  };
+  const natural = (c: number) => colWidthPx(grid.col_widths[c], grid.default_col_width);
   const rowH = (r: number) => {
     const h = rowHeightPx(grid.row_heights[r], grid.default_row_height);
     return compact ? Math.max(20, Math.round(h * 0.78)) : h;
   };
-  const gutter = compact ? 28 : 44;
+  const gutter = compact ? 28 : 38;
 
-  // Fit-to-Width (Desktop): das Raster so weit herunterzoomen, dass alle Spalten
-  // ohne horizontales Scrollen sichtbar sind. `zoom` skaliert alles proportional
-  // (Breiten, Schrift, Höhen) und erhält dabei Layout + Sticky-Header.
-  let naturalW = gutter;
-  for (const c of cols) naturalW += colW(c);
-  const fitZoom =
-    !compact && containerW > 0 && naturalW > containerW
-      ? Math.max(0.4, (containerW - 2) / naturalW)
-      : 1;
+  // Inhalts-Spalten (breit, z.B. Details) füllen am Desktop die Restbreite,
+  // schmale Spalten (Zeit, Kürzel) bleiben klein → ganze Tabelle ohne H-Scroll.
+  const FLEX_MIN = 120;
+  const isFlex = (c: number) => !compact && natural(c) >= FLEX_MIN;
+
+  // Fixe Breite einer (nicht-flexiblen) Spalte
+  const fixedW = (c: number) => {
+    const w = natural(c);
+    if (compact) return Math.max(30, Math.min(150, Math.round(w * 0.58)));
+    if (c === 1) return 56; // Zeit-Spalte bewusst schmal
+    return Math.min(w, 160);
+  };
+
+  // Auf Mobil: Tabelle so breit wie die Summe (horizontal scrollbar).
+  // Am Desktop: 100% → flexible Spalten verteilen die Restbreite, kein H-Scroll.
+  const mobileWidth = gutter + cols.reduce((s, c) => s + fixedW(c), 0);
 
   return (
     <table
       className="border-separate border-spacing-0 select-none"
-      style={{ tableLayout: "fixed", zoom: fitZoom }}
+      style={{ tableLayout: "fixed", width: compact ? mobileWidth : "100%" }}
     >
       <colgroup>
         <col style={{ width: gutter }} />
-        {cols.map((c) => (
-          <col key={c} style={{ width: colW(c) }} />
-        ))}
+        {cols.map((c) =>
+          isFlex(c) ? <col key={c} /> : <col key={c} style={{ width: fixedW(c) }} />
+        )}
       </colgroup>
       <thead>
         <tr>
