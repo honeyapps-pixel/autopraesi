@@ -86,17 +86,39 @@ NEGATIVE = (
 )
 
 
-def _build_prompt(theme: str, wochenspruch: str, freitext: str) -> str:
-    """Baut den Bildprompt – reine SZENEN-Beschreibung aus Freitext + Stil.
+# Bildvarianten: bei 2–3 Bildern bekommt jedes eine ANDERE Variante (Motiv/Licht/
+# Komposition), damit nicht 3× fast dasselbe entsteht. Auf eure Hintergrundbilder
+# abgestimmt (ruhige Natur + dezente christliche Symbolik). Wird mit dem Freitext
+# kombiniert; der Freitext steht zuerst (höchstes Gewicht).
+VARIATIONS = [
+    "an open golden field under a vast sunrise sky, soft warm light",
+    "a misty forest with sunbeams streaming through the trees",
+    "calm reflective water at dawn with a soft glowing sky and gentle mist",
+    "a distant cross silhouette on a hill against a dramatic golden sunset",
+    "rolling hills under dramatic clouds with strong god rays",
+    "a close, intimate nature detail with shallow depth of field and warm bokeh",
+    "a quiet path leading toward a luminous horizon at golden hour",
+    "soft candlelight near an open Bible in warm gentle focus",
+    "a vast starry night sky over a calm silent landscape",
+    "a coastal horizon at dawn with soft pastel colors and calm sea",
+]
+
+
+def _build_prompt(theme: str, wochenspruch: str, freitext: str, variation: str = "") -> str:
+    """Baut den Bildprompt – reine SZENEN-Beschreibung aus Freitext (+ Variante) + Stil.
 
     Thema und Wochenspruch werden BEWUSST NICHT in den Bildprompt übernommen: kurze, slogan-
     artige Phrasen (z.B. ein Thema) malt das Modell sonst manchmal als Titel ins Bild. Sie
     dienen im Formular nur als Inspiration für den Freitext. Der eigentliche Text (Titel,
     Datum, Vers) liegt später als Overlay auf der Folie – nicht im generierten Bild.
+
+    ``variation`` sorgt bei Mehrfach-Generierung für deutlich unterschiedliche Bilder.
     """
     parts: list[str] = []
     if freitext and freitext.strip():
         parts.append(freitext.strip())
+    if variation:
+        parts.append(variation)
     parts.append(STYLE)
     # Bewusst KEIN "no text" im Positiv-Prompt – Negationen werden dort schlecht verstanden
     # und führen eher zu Schrift. Textausschluss passiert über NEGATIVE.
@@ -181,15 +203,25 @@ def _worker() -> None:
 threading.Thread(target=_worker, daemon=True, name="imagegen-worker").start()
 
 
-def _enqueue(prompt: str, count: int, seed: Optional[int]) -> list[dict]:
-    """Legt ``count`` Jobs an und gibt [{id, seed}] (Status: pending) zurück."""
+def _enqueue(theme: str, wochenspruch: str, freitext: str, count: int,
+             seed: Optional[int]) -> list[dict]:
+    """Legt ``count`` Jobs an – jeder mit eigener Bildvariante – und gibt [{id, seed}] zurück.
+
+    Jedes Bild bekommt eine ANDERE Variante aus ``VARIATIONS`` (rotierend, zeitversetzt),
+    damit 2–3 Bilder deutlich verschieden ausfallen statt fast identisch. Auch wiederholtes
+    Generieren rotiert (Zeitbasis), sodass nicht immer dieselben Varianten kommen.
+    """
     if seed is not None:
-        seeds = [seed + i for i in range(count)]
+        seeds = [seed + i * 9973 for i in range(count)]
     else:
         base = int(time.time() * 1000) % 1_000_000
         seeds = [base + i * 7919 for i in range(count)]
+
+    offset = int(time.time())  # rotiert die Varianten über Generierungen hinweg
     out: list[dict] = []
-    for s in seeds:
+    for i, s in enumerate(seeds):
+        variation = VARIATIONS[(offset + i) % len(VARIATIONS)]
+        prompt = _build_prompt(theme, wochenspruch, freitext, variation)
         job_id = uuid.uuid4().hex
         with _jobs_lock:
             _jobs[job_id] = {"status": "pending", "seed": s, "error": None, "prompt": prompt}
@@ -252,18 +284,16 @@ def health():
 
 @app.post("/generate")
 def generate(req: GenerateRequest):
-    """Legt 1–3 Bild-Jobs an und kehrt sofort zurück (Status: pending)."""
-    prompt = _build_prompt(req.theme, req.wochenspruch, req.freitext)
-    items = _enqueue(prompt, req.count, req.seed)
-    return {"images": [_image_payload(it) for it in items], "prompt": prompt}
+    """Legt 1–3 Bild-Jobs an (je eigene Variante) und kehrt sofort zurück (Status: pending)."""
+    items = _enqueue(req.theme, req.wochenspruch, req.freitext, req.count, req.seed)
+    return {"images": [_image_payload(it) for it in items]}
 
 
 @app.post("/regenerate")
 def regenerate(req: RegenerateRequest):
-    """Legt EINEN neuen Bild-Job an (geänderter Prompt/Seed) = „Bearbeiten"."""
-    prompt = _build_prompt(req.theme, req.wochenspruch, req.freitext)
-    items = _enqueue(prompt, 1, req.seed)
-    return {**_image_payload(items[0]), "prompt": prompt}
+    """Legt EINEN neuen Bild-Job an (frische Variante/Seed) = „Bearbeiten"."""
+    items = _enqueue(req.theme, req.wochenspruch, req.freitext, 1, req.seed)
+    return _image_payload(items[0])
 
 
 @app.get("/status")
