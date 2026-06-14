@@ -333,8 +333,20 @@ def _parse_header(header: str) -> tuple:
     return date_str, kirche
 
 
+def _is_conflict_copy(name: str) -> bool:
+    """Erkennt Dropbox-Konfliktkopien (sollen ignoriert werden)."""
+    low = name.lower()
+    return "in konflikt stehende kopie" in low or "conflicted copy" in low
+
+
 def _is_godi_plan(name: str) -> bool:
-    """Prüft, ob ein Dateiname eine GoDi-Plan Excel-Datei ist."""
+    """Prüft, ob ein Dateiname eine echte GoDi-Plan Excel-Datei ist.
+
+    Dropbox-Konfliktkopien werden ausgeschlossen, damit sie weder im
+    Präsentations- noch im GoDi-Plan-Reiter als Auswahl auftauchen.
+    """
+    if _is_conflict_copy(name):
+        return False
     return name.startswith("GoDi-Plan") and name.lower().endswith(".xlsx")
 
 
