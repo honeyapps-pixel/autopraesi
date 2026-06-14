@@ -162,20 +162,20 @@ def parse_song_entry(raw: str, slot_key: str = "", col_b: str = "") -> SongEntry
     # Doppelte Leerzeichen normalisieren (v1.4.1 Bugfix)
     text = re.sub(r'\s+', ' ', text)
 
-    # Kategorie-Prefix erkennen und entfernen
-    if text.lower().startswith("lobpreisstrophe:"):
+    # Kategorie-Prefix erkennen und entfernen. Das Trennzeichen nach dem Präfix
+    # variiert in der Praxis ("Sonstige Lieder - X", "Sonstige Lieder- X",
+    # "Sonstige Lieder: X") – daher führende Trennzeichen robust abschneiden.
+    _SEP = " -–—:\t"
+    low = text.lower()
+    if low.startswith("lobpreisstrophe"):
         song.category = "Lobpreisstrophe"
-        text = text[len("lobpreisstrophe:"):].strip()
-    elif text.lower().startswith("kinderlied:"):
+        text = text[len("lobpreisstrophe"):].lstrip(_SEP).strip()
+    elif low.startswith("kinderlied"):
         song.category = "Kinderlied"
-        text = text[len("kinderlied:"):].strip()
-    elif text.lower().startswith("sonstige lieder"):
+        text = text[len("kinderlied"):].lstrip(_SEP).strip()
+    elif low.startswith("sonstige lieder"):
         song.category = "Sonstige Lieder"
-        # "Sonstige Lieder - Heilig heilig" oder "Sonstige Lieder: Titel"
-        if " - " in text:
-            text = text.split(" - ", 1)[1].strip()
-        elif ":" in text:
-            text = text.split(":", 1)[1].strip()
+        text = text[len("sonstige lieder"):].lstrip(_SEP).strip()
     else:
         song.category = "Gemeindelied"
 
