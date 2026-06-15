@@ -59,6 +59,9 @@ export default function BilderTab() {
   const [images, setImages] = useState<Candidate[]>([]);
   const [generating, setGenerating] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // „Bearbeiten": welcher Kandidat gerade ein Eingabefeld zeigt + dessen Text
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
   const [savedName, setSavedName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadingSheet, setLoadingSheet] = useState(false);
@@ -163,17 +166,23 @@ export default function BilderTab() {
     }
   };
 
-  // „Bearbeiten": Kandidat mit aktuellem (ggf. geändertem) Prompt + neuem Seed neu erzeugen.
-  const handleRegenerate = async (img: Candidate) => {
+  // „Bearbeiten": Kandidat anhand der eingegebenen Bildbeschreibung neu erzeugen.
+  const handleRegenerate = async (img: Candidate, editFreitext: string) => {
     setError(null);
+    setEditingId(null);
     try {
-      const fresh = await regenImage(promptInput());
+      const fresh = await regenImage({ theme, wochenspruch, freitext: editFreitext });
       if (img.objectUrl) URL.revokeObjectURL(img.objectUrl);
       delImage(img.id).catch(() => {});
       setImages((prev) => prev.map((x) => (x.id === img.id ? (fresh as Candidate) : x)));
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+
+  const startEditing = (img: Candidate) => {
+    setEditingId(img.id);
+    setEditText(freitext);
   };
 
   const handleDelete = (img: Candidate) => {
@@ -376,9 +385,11 @@ export default function BilderTab() {
                         <button
                           type="button"
                           disabled={img.status === "pending" || isConfirming}
-                          onClick={() => handleRegenerate(img)}
-                          className="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-40"
-                          title="Mit aktuellem Prompt neu erzeugen"
+                          onClick={() => (editingId === img.id ? setEditingId(null) : startEditing(img))}
+                          className={`text-xs font-medium px-2.5 py-1.5 rounded-lg disabled:opacity-40 ${
+                            editingId === img.id ? "bg-[var(--accent)] text-white" : "bg-gray-100 hover:bg-gray-200"
+                          }`}
+                          title="Bildbeschreibung anpassen und neu erzeugen"
                         >
                           Bearbeiten
                         </button>
@@ -391,6 +402,35 @@ export default function BilderTab() {
                           Löschen
                         </button>
                       </div>
+
+                      {/* Bearbeiten-Feld: Bildbeschreibung anpassen → neu erzeugen */}
+                      {editingId === img.id && (
+                        <div className="space-y-2 rounded-lg bg-[var(--accent)]/5 border border-[var(--accent)]/20 p-2">
+                          <textarea
+                            className="input-field w-full text-sm min-h-[56px] resize-y"
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            placeholder="Beschreibe, wie das neue Bild aussehen soll, z.B. „ruhiger See bei Sonnenuntergang, warmes Licht“"
+                            autoFocus
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleRegenerate(img, editText)}
+                              className="flex-1 text-xs font-medium py-1.5 rounded-lg bg-[var(--accent)] text-white hover:opacity-90"
+                            >
+                              Neu erzeugen
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              className="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200"
+                            >
+                              Abbrechen
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
