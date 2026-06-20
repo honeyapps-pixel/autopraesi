@@ -20,7 +20,29 @@ der Kostentreiber (~1 Min/Bild bei 1024×768/8 Steps), nicht das Laden.
 # MFLUX ist bereits in ~/.mflux-venv installiert; ngrok mit Authtoken konfiguriert.
 ```
 
-## Starten
+## Auto-Start (empfohlen)
+
+Der Dienst läuft als **macOS-LaunchAgent** automatisch bei jedem Login und startet bei
+Absturz neu (`KeepAlive`). Status: `com.autopraesi.imagegen`.
+
+**Wichtig (macOS TCC):** Hintergrund-Dienste (launchd) dürfen NICHT auf `~/Desktop` zugreifen
+(„Operation not permitted"). Das Repo liegt unter `~/Desktop`, daher läuft der Dienst aus einer
+**Kopie** unter `~/Library/Application Support/AutoPraesi/imagegen/`. Das Repo bleibt die Quelle.
+
+```bash
+cd autopraesi_python/imagegen
+./deploy-local.sh --install   # einmalig: Agent installieren + Kopie anlegen
+./deploy-local.sh             # nach Code-Änderungen: Kopie aktualisieren + Agent neu starten
+```
+
+Agent von Hand steuern:
+```bash
+launchctl kickstart -k gui/$(id -u)/com.autopraesi.imagegen   # neu starten
+launchctl bootout   gui/$(id -u)/com.autopraesi.imagegen      # stoppen/deaktivieren
+tail -f /tmp/imagegen-agent.err                                # Logs
+```
+
+## Manuell starten (ohne Auto-Start)
 
 ```bash
 cd autopraesi_python/imagegen

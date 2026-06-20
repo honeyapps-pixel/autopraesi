@@ -19,6 +19,11 @@ UVICORN="$VENV/bin/uvicorn"
 [ -x "$UVICORN" ] || { echo "❌ uvicorn nicht im venv: $UVICORN  (pip install fastapi 'uvicorn[standard]')" >&2; exit 1; }
 command -v ngrok >/dev/null || { echo "❌ ngrok nicht gefunden (brew install ngrok)" >&2; exit 1; }
 
+# Altprozesse sauber beenden (verhindert Port-/ngrok-Sitzungskonflikte beim Neustart).
+pkill -f "uvicorn imagegen_api" 2>/dev/null || true
+pkill -f "ngrok http $PORT" 2>/dev/null || true
+sleep 1
+
 echo "▶ Starte Generator-Dienst auf 127.0.0.1:$PORT …"
 "$UVICORN" imagegen_api:app --host 127.0.0.1 --port "$PORT" &
 API_PID=$!
