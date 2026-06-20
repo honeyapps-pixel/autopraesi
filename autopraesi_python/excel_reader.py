@@ -16,10 +16,18 @@ from config import (GODI_PLAN_DIR, EXCEL_ROWS, ABKUENDIGUNGEN_ROWS,
 
 log = logging.getLogger(__name__)
 
-# Farb-Codes für die automatische Erkennung (Excel fgColor RGB)
-SONG_COLOR    = "FFC5E0B4"  # Grün  → Lied
-PREDIGT_COLOR = "FFFFA7A7"  # Rot   → Predigt-Bibelstelle
-LESUNG_COLOR  = "FFF8CBAD"  # Orange → Lesung-Bibelstelle
+# Farb-Codes für die automatische Erkennung. Verglichen wird nur der 6-stellige RGB-Teil
+# (ohne Alpha), und Zellfarben werden – egal ob als rgb ODER indexed gespeichert – auf RGB
+# aufgelöst. So werden Lieder auch erkannt, wenn die Excel-Zelle eine indizierte Farbe
+# nutzt (z.B. Index 42 = CCFFCC) statt der Theme-Farbe C5E0B4.
+SONG_COLORS    = {"C5E0B4", "CCFFCC", "C6EFCE"}  # Grüntöne  → Lied
+PREDIGT_COLORS = {"FFA7A7", "FFC7CE"}            # Rottöne   → Predigt-Bibelstelle
+LESUNG_COLORS  = {"F8CBAD", "FCE4D6"}            # Orangetöne → Lesung-Bibelstelle
+
+# Rückwärtskompatible Einzelwerte (falls anderswo referenziert)
+SONG_COLOR    = "FFC5E0B4"
+PREDIGT_COLOR = "FFFFA7A7"
+LESUNG_COLOR  = "FFF8CBAD"
 
 # Bekannte Lied-Präfixe für die Inhaltserkennung
 _SONG_BOOKS = re.compile(
@@ -74,22 +82,42 @@ class GodiPlanData:
     invitation_events: list = field(default_factory=list)  # List[InvitationEvent]
 
 
+def _norm_rgb6(fg) -> Optional[str]:
+    """Löst eine Zellfarbe auf den 6-stelligen RGB-Teil (großgeschrieben) auf.
+
+    Unterstützt sowohl ``rgb``-Farben als auch ``indexed``-Palettenfarben (z.B. Index 42
+    = CCFFCC). Theme-Farben werden hier nicht aufgelöst (kein zuverlässiger Tint-Bezug);
+    sie liefern None.
+    """
+    try:
+        if fg is None:
+            return None
+        if fg.type == 'rgb' and isinstance(fg.rgb, str):
+            return fg.rgb.upper()[-6:]
+        if fg.type == 'indexed':
+            from openpyxl.styles.colors import COLOR_INDEX
+            return str(COLOR_INDEX[fg.indexed]).upper()[-6:]
+    except Exception:
+        return None
+    return None
+
+
 def _get_cell_color(cell) -> Optional[str]:
-    """Gibt die RGB-Hintergrundfarbe einer Zelle zurück, oder None."""
+    """Gibt den 6-stelligen RGB-Wert der Zellfüllung zurück, oder None.
+
+    Ignoriert leere/weiße/schwarze Füllungen. Löst rgb- UND indexed-Farben auf, damit die
+    Lied-/Bibelstellen-Erkennung unabhängig davon funktioniert, wie die Farbe gespeichert ist.
+    """
     try:
         fill = cell.fill
         if not fill:
             return None
-        fg = fill.fgColor
-        if fg and fg.type == 'rgb':
-            rgb = fg.rgb
-            # Transparent/Weiß/Schwarz ignorieren
-            if rgb in ("00000000", "FFFFFFFF", "FF000000", "00FFFFFF"):
-                return None
-            return rgb
+        rgb6 = _norm_rgb6(fill.fgColor)
+        if not rgb6 or rgb6 in ("000000", "FFFFFF"):
+            return None
+        return rgb6
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _looks_like_song(val: str) -> bool:
@@ -129,16 +157,16 @@ def _scan_by_color(ws) -> tuple:
         color = _get_cell_color(cell)
         val = str(cell.value).strip() if cell.value else ""
 
-        if color == SONG_COLOR and _looks_like_song(val):
+        if color in SONG_COLORS and _looks_like_song(val):
             col_b = str(ws.cell(row=row, column=2).value or "").strip()
             song_raws.append((row, val, col_b))
             log.debug(f"Farb-Scan: Lied in Zeile {row}: {val[:60]} (B={col_b})")
 
-        elif color == LESUNG_COLOR and _looks_like_single_bible_ref(val) and not lesung_ref:
+        elif color in LESUNG_COLORS and _looks_like_single_bible_ref(val) and not lesung_ref:
             lesung_ref = val
             log.debug(f"Farb-Scan: Lesung in Zeile {row}: {val}")
 
-        elif color == PREDIGT_COLOR and _looks_like_single_bible_ref(val):
+        elif color in PREDIGT_COLORS and _looks_like_single_bible_ref(val):
             predigt_refs.append(val)
             log.debug(f"Farb-Scan: Predigt-Ref in Zeile {row}: {val}")
 
