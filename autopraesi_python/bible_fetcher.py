@@ -60,6 +60,15 @@ BOOK_MAPPING = {
 
 BIBLE_URL = "https://www.die-bibel.de/bibel/LU84/{book}.{chapter}"
 
+# die-bibel.de blockiert generische User-Agents (HTTP 403), daher voller Browser-UA
+HTTP_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "de-DE,de;q=0.9",
+}
+
 
 def _lookup_book(book_de: str):
     """Schlägt ein Buch im Mapping nach, normalisiert '1 petrus' → '1. petrus' etc."""
@@ -176,8 +185,7 @@ def fetch_bible_text(reference: str) -> list:
             else:
                 log.info(f"Lade Bibeltext: {book_abbr} {chapter},{verse_start}-{verse_end}")
 
-            resp = requests.get(url, timeout=15,
-                                headers={"User-Agent": "Mozilla/5.0"})
+            resp = requests.get(url, timeout=15, headers=HTTP_HEADERS)
             if resp.status_code != 200:
                 log.warning(f"HTTP {resp.status_code} für {url}")
                 all_verses.append((0, f"[{reference}]"))
