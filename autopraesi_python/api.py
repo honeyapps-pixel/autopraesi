@@ -386,7 +386,7 @@ def generate_presentation(req: GenerateRequest):
     output_name = f"{req.sheet_name}_ungeprüft.pptx"
 
     try:
-        output = build_presentation(
+        output, missing_bible = build_presentation(
             data, song_paths,
             image_path=image_path,
             fetch_bible=req.fetch_bible,
@@ -410,6 +410,7 @@ def generate_presentation(req: GenerateRequest):
         "output_path": output,
         "output_name": os.path.basename(output),
         "missing_songs": missing,
+        "missing_bible": missing_bible,
     }
 
 

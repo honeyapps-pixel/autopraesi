@@ -99,9 +99,11 @@ def parse_reference(reference: str) -> list:
     Beispiele:
         "Lukas 9, 57-62" → [("LUK", 9, 57, 62)]
         "Epheser 4,23" → [("EPH", 4, 23, 23)]
+        "Lukas 18,35-19,10" → [("LUK", 18, 35, None), ("LUK", 19, 1, 10)]
 
     Returns:
-        Liste von (book_abbr, chapter, verse_start, verse_end) Tupeln
+        Liste von (book_abbr, chapter, verse_start, verse_end) Tupeln.
+        verse_start=None: ganzes Kapitel. verse_end=None: bis Kapitelende.
     """
     results = []
     parts = reference.split(";")
@@ -118,7 +120,7 @@ def parse_reference(reference: str) -> list:
             r'(\d+)'
             r'[,.\s]\s*'
             r'(\d+)'
-            rf'(?:\s*[{_DASH_CHARS}]\s*(\d+))?',
+            rf'(?:\s*[{_DASH_CHARS}]\s*(?:(\d+)\s*[,.]\s*)?(\d+))?',
             part
         )
 
@@ -126,14 +128,26 @@ def parse_reference(reference: str) -> list:
             book_de = match.group(1).strip().lower()
             chapter = int(match.group(2))
             verse_start = int(match.group(3))
-            verse_end = int(match.group(4)) if match.group(4) else verse_start
+            end_chapter = int(match.group(4)) if match.group(4) else None
+            verse_end = int(match.group(5)) if match.group(5) else verse_start
 
             book_abbr = _lookup_book(book_de)
 
-            if book_abbr:
-                results.append((book_abbr, chapter, verse_start, verse_end))
-            else:
+            if not book_abbr:
                 log.warning(f"Unbekanntes Buch: {book_de} in '{part}'")
+                continue
+
+            if end_chapter is None or end_chapter == chapter:
+                results.append((book_abbr, chapter, verse_start, verse_end))
+            elif end_chapter > chapter:
+                # Kapitelübergreifend, z.B. "Lukas 18,35-19,10":
+                # Startkapitel bis Ende, Zwischenkapitel ganz, Endkapitel ab Vers 1
+                results.append((book_abbr, chapter, verse_start, None))
+                for ch in range(chapter + 1, end_chapter):
+                    results.append((book_abbr, ch, None, None))
+                results.append((book_abbr, end_chapter, 1, verse_end))
+            else:
+                log.warning(f"Ungültiger Kapitelbereich: {part}")
             continue
 
         # Fallback: "Buch Kapitel" ohne Vers (z.B. "Psalm 133")
@@ -182,6 +196,8 @@ def fetch_bible_text(reference: str) -> list:
             url = BIBLE_URL.format(book=book_abbr, chapter=chapter)
             if verse_start is None:
                 log.info(f"Lade Bibeltext: {book_abbr} {chapter} (ganzes Kapitel)")
+            elif verse_end is None:
+                log.info(f"Lade Bibeltext: {book_abbr} {chapter},{verse_start} bis Kapitelende")
             else:
                 log.info(f"Lade Bibeltext: {book_abbr} {chapter},{verse_start}-{verse_end}")
 
@@ -193,40 +209,30 @@ def fetch_bible_text(reference: str) -> list:
 
             soup = BeautifulSoup(resp.text, 'html.parser')
 
-            if verse_start is None:
-                # Ganzes Kapitel: alle Verse mit Klasse LU84.{book}.{chapter}.N sammeln
-                verse_dict = {}
-                prefix = f"LU84.{book_abbr}.{chapter}."
-                for span in soup.find_all(class_=True):
-                    for cls in span.get("class", []):
-                        if cls.startswith(prefix):
-                            try:
-                                v_num = int(cls[len(prefix):])
-                            except ValueError:
-                                continue
-                            text = re.sub(r'\s+', ' ', span.get_text(strip=False)).strip()
-                            if text:
-                                if v_num in verse_dict:
-                                    verse_dict[v_num] += " " + text
-                                else:
-                                    verse_dict[v_num] = text
-                for v_num in sorted(verse_dict.keys()):
-                    all_verses.append((v_num, verse_dict[v_num]))
-            else:
-                for v_num in range(verse_start, verse_end + 1):
-                    class_name = f"LU84.{book_abbr}.{chapter}.{v_num}"
-                    spans = soup.find_all(class_=class_name)
-
-                    verse_text = ""
-                    for span in spans:
-                        text = span.get_text(strip=False)
-                        text = re.sub(r'\s+', ' ', text).strip()
+            # Alle Verse des Kapitels sammeln (Klassen LU84.{book}.{chapter}.N),
+            # danach den gewünschten Bereich auswählen
+            verse_dict = {}
+            prefix = f"LU84.{book_abbr}.{chapter}."
+            for span in soup.find_all(class_=True):
+                for cls in span.get("class", []):
+                    if cls.startswith(prefix):
+                        try:
+                            v_num = int(cls[len(prefix):])
+                        except ValueError:
+                            continue
+                        text = re.sub(r'\s+', ' ', span.get_text(strip=False)).strip()
                         if text:
-                            verse_text += " " + text if verse_text else text
+                            if v_num in verse_dict:
+                                verse_dict[v_num] += " " + text
+                            else:
+                                verse_dict[v_num] = text
 
-                    verse_text = verse_text.strip()
-                    if verse_text:
-                        all_verses.append((v_num, verse_text))
+            for v_num in sorted(verse_dict.keys()):
+                if verse_start is not None and v_num < verse_start:
+                    continue
+                if verse_end is not None and v_num > verse_end:
+                    continue
+                all_verses.append((v_num, verse_dict[v_num]))
 
         except requests.RequestException as e:
             log.warning(f"Netzwerkfehler beim Laden von {reference}: {e}")
@@ -238,56 +244,10 @@ def fetch_bible_text(reference: str) -> list:
     return all_verses
 
 
-def format_verses_plain(verses: list) -> str:
-    """Formatiert Verse als einfachen Text (für Fallback)."""
-    parts = []
-    for v_num, text in verses:
-        if v_num > 0:
-            parts.append(f"{v_num}{text}")
-        else:
-            parts.append(text)
-    return "\n".join(parts)
-
-
-def split_text_for_slides(text: str, max_chars: int = 500) -> list:
-    """Teilt einen langen Text in Abschnitte für mehrere Folien."""
-    if len(text) <= max_chars:
-        return [text]
-
-    lines = text.split("\n")
-    chunks = []
-    current = []
-    current_len = 0
-
-    for line in lines:
-        if current_len + len(line) + 1 > max_chars and current:
-            chunks.append("\n".join(current))
-            current = [line]
-            current_len = len(line)
-        else:
-            current.append(line)
-            current_len += len(line) + 1
-
-    if current:
-        chunks.append("\n".join(current))
-
-    return chunks
-
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    ref = "Lukas 9, 57-62"
-    print(f"Referenz: {ref}")
-    verses = fetch_bible_text(ref)
-    for num, text in verses:
-        print(f"  {num}: {text}")
-
-    print(f"\nAls Plaintext:\n{format_verses_plain(verses)}")
-
-    print("\n" + "=" * 60)
-    ref2 = "Epheser 4,23"
-    print(f"Referenz: {ref2}")
-    verses2 = fetch_bible_text(ref2)
-    for num, text in verses2:
-        print(f"  {num}: {text}")
+    for ref in ["Lukas 9, 57-62", "Epheser 4,23", "Lukas 18,35-19,10"]:
+        print(f"\nReferenz: {ref}")
+        for num, text in fetch_bible_text(ref):
+            print(f"  {num}: {text[:70]}")

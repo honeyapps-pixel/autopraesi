@@ -116,8 +116,9 @@ def run(sunday: date = None):
 
     # 4. Präsentation bauen
     try:
-        output = build_presentation(data, song_paths, image_path=image_path,
-                                    fetch_bible=True)
+        output, missing_bible = build_presentation(data, song_paths,
+                                                   image_path=image_path,
+                                                   fetch_bible=True)
     except Exception as e:
         log.error(f"Fehler beim Erstellen: {e}")
         report_run(sunday, "error", data=data,
@@ -145,6 +146,9 @@ def run(sunday: date = None):
 
     if missing:
         log.warning("ACHTUNG: Fehlende Lieder – Präsentation manuell prüfen!")
+    if missing_bible:
+        log.warning(f"ACHTUNG: Bibeltexte nicht geladen ({', '.join(missing_bible)}) "
+                    "– Präsentation manuell prüfen!")
 
     return output
 

@@ -227,6 +227,23 @@ def _copy_image_rel(source_slide, target_slide, source_rId):
         return None
 
 
+def refresh_image_cache(package, image_part):
+    """Aktualisiert den Dedup-Cache, nachdem der Blob eines Parts getauscht wurde.
+
+    Entfernt veraltete Hash-Einträge auf diesen Part und registriert ihn unter
+    dem Hash des neuen Blobs. Ohne das würden spätere Folien-Kopien (z.B.
+    Bibeltext-Duplikate) das getauschte Bild ein zweites Mal einbetten.
+    """
+    cache = getattr(package, '_autopraesi_image_cache', None)
+    if cache is None:
+        cache = {}
+        package._autopraesi_image_cache = cache
+    for key in [k for k, v in cache.items() if v is image_part]:
+        del cache[key]
+    cache_key = (hashlib.sha1(image_part.blob).hexdigest(), image_part.content_type)
+    cache[cache_key] = image_part
+
+
 def _content_type_to_ext(content_type: str) -> str:
     """Konvertiert Content-Type zu Dateiendung."""
     mapping = {

@@ -72,6 +72,8 @@ export interface GenerateResult {
   output_path: string;
   output_name: string;
   missing_songs: string[];
+  // Optional: ältere Backend-Versionen liefern das Feld noch nicht
+  missing_bible?: string[];
 }
 
 export async function getCurrentQuarter(): Promise<string> {

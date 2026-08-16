@@ -1312,6 +1312,13 @@ export default function PresentationTab() {
                     Fehlende Lieder: {result.missing_songs.join(", ")}
                   </p>
                 )}
+                {(result.missing_bible?.length ?? 0) > 0 && (
+                  <p className="text-xs text-[var(--warning)] mt-2">
+                    Bibeltext konnte nicht geladen werden:{" "}
+                    {result.missing_bible!.join(", ")} — in der Folie steht nur
+                    ein Platzhalter
+                  </p>
+                )}
               </motion.div>
             )}
           </motion.div>

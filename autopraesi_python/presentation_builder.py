@@ -16,7 +16,7 @@ import storage
 from config import (TEMPLATE_PATH, OUTPUT_DIR_DROPBOX,
                     DEFAULT_SECTION_ORDER, SECTION_BLOCKS, INTRO_SLIDES,
                     TOGGLEABLE_SECTIONS)
-from slide_copier import build_presentation_from_plan, copy_slide
+from slide_copier import build_presentation_from_plan, copy_slide, refresh_image_cache
 from bible_fetcher import fetch_bible_text
 
 # XML Namespaces
@@ -110,7 +110,8 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
         extra_songs: Dict {slot_key: pfad} für Extra-Lieder (song_extra1, ...)
 
     Returns:
-        Lokaler Temp-Pfad zur erstellten Präsentation (zusätzlich nach Dropbox hochgeladen)
+        Tupel (lokaler Temp-Pfad zur erstellten Präsentation, Liste von
+        Bibeltext-Warnungen). Die Datei wird zusätzlich nach Dropbox hochgeladen.
     """
     # Ausgabe-Dateiname
     if output_name is None:
@@ -155,7 +156,7 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
         _apply_image_filter(prs, image_filter)
 
     # === Phase 4: Texte ersetzen ===
-    _fill_all_text(prs, data, fetch_bible, template_indices)
+    bible_warnings = _fill_all_text(prs, data, fetch_bible, template_indices)
 
     # === Phase 4b: Textfarbe auf Thema-Folien anpassen ===
     if text_color == "black":
@@ -185,7 +186,7 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     except Exception as e:
         log.warning(f"Dropbox-Upload fehlgeschlagen: {e}")
 
-    return output_path
+    return output_path, bible_warnings
 
 
 _THEME_IMAGE_SHAPE_NAME = "Grafik 5"
@@ -233,6 +234,7 @@ def _set_theme_image(prs, image_path: str):
             part_id = id(rel.target_part)
             if part_id not in replaced_parts:
                 rel.target_part._blob = new_blob
+                refresh_image_cache(slide.part.package, rel.target_part)
                 replaced_parts.add(part_id)
             count += 1
         except (KeyError, AttributeError) as e:
@@ -722,16 +724,28 @@ def _fill_all_text(prs, data, fetch_bible: bool, template_indices: set = None):
     Da die Folienreihenfolge jetzt dynamisch ist (durch eingefügte Lieder),
     suchen wir Folien anhand ihres Textinhalts statt nach fester Position.
     Bibeltexte werden bei Bedarf auf mehrere Folien aufgeteilt.
+
+    Returns:
+        Liste von Warnungen für Bibeltexte, die nicht (vollständig) geladen
+        werden konnten, z.B. ["Lesung: Psalm 133"]. In der Folie steht dann
+        nur ein Platzhalter wie "[Psalm 133]".
     """
     # Pre-fetch bible texts so we know how many slides we need
     bible_data = {}
+    bible_warnings = []
     if fetch_bible:
-        if data.lesung_reference:
-            bible_data['lesung'] = fetch_bible_text(data.lesung_reference)
-        if data.predigt1_reference:
-            bible_data['predigt1'] = fetch_bible_text(data.predigt1_reference)
-        if data.predigt2_reference:
-            bible_data['predigt2'] = fetch_bible_text(data.predigt2_reference)
+        slots = [('lesung', 'Lesung', data.lesung_reference),
+                 ('predigt1', 'Predigt', data.predigt1_reference),
+                 ('predigt2', 'Predigt 2', data.predigt2_reference)]
+        for key, label, reference in slots:
+            if not reference:
+                continue
+            verses = fetch_bible_text(reference)
+            bible_data[key] = verses
+            # Vers-Nummer 0 = Platzhalter (Fetch/Parse fehlgeschlagen)
+            if not verses or any(num == 0 for num, _ in verses):
+                bible_warnings.append(f"{label}: {reference}")
+                log.warning(f"Bibeltext unvollständig: {label}: {reference}")
 
     # First pass: find bible text slides and duplicate if needed
     # We iterate by index because we insert slides during the loop
@@ -759,7 +773,7 @@ def _fill_all_text(prs, data, fetch_bible: bool, template_indices: set = None):
             bible_key = 'predigt2'
             placeholder_text = "Predigttext2"
             header_old = "Predigt: Bibelstelle"
-            header_new = f"Predigt : {data.predigt2_reference}"
+            header_new = f"Predigt: {data.predigt2_reference}"
 
         if bible_key and bible_key in bible_data:
             verses = bible_data[bible_key]
@@ -803,6 +817,8 @@ def _fill_all_text(prs, data, fetch_bible: bool, template_indices: set = None):
             _fill_slide_simple(slide, data, is_template)
 
         i += 1
+
+    return bible_warnings
 
 
 def _fix_title_overflow(shape):
@@ -1235,8 +1251,10 @@ if __name__ == "__main__":
         if path:
             song_paths[song.slot_key] = path
 
-    output = build_presentation(data, song_paths, fetch_bible=True)
+    output, bible_warnings = build_presentation(data, song_paths, fetch_bible=True)
     print(f"\nPräsentation erstellt: {output}")
+    if bible_warnings:
+        print(f"Bibeltext-Warnungen: {bible_warnings}")
 
     # Verify
     prs = Presentation(output)
