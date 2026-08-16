@@ -5,6 +5,7 @@ in der richtigen Reihenfolge kopiert werden.
 """
 
 import copy
+import hashlib
 import logging
 import os
 
@@ -191,19 +192,34 @@ def _resolve_placeholder_geometry(new_el, shape):
 
 
 def _copy_image_rel(source_slide, target_slide, source_rId):
-    """Kopiert eine Bild-Relation von Quell- zu Ziel-Slide."""
+    """Kopiert eine Bild-Relation von Quell- zu Ziel-Slide.
+
+    Identische Bilddaten werden pro Ziel-Paket nur einmal eingebettet:
+    Ohne Deduplizierung bekäme jede Folie eine eigene Kopie (z.B. 24x
+    dasselbe Hintergrundbild) und die Datei wird um Megabytes größer.
+    """
     global _media_counter
     try:
         src_rel = source_slide.part.rels[source_rId]
         image_blob = src_rel.target_part.blob
         content_type = src_rel.target_part.content_type
 
-        _media_counter += 1
-        ext = _content_type_to_ext(content_type)
-        media_name = f"image_auto_{_media_counter}{ext}"
-        partname = PackURI(f'/ppt/media/{media_name}')
+        package = target_slide.part.package
+        cache = getattr(package, '_autopraesi_image_cache', None)
+        if cache is None:
+            cache = {}
+            package._autopraesi_image_cache = cache
 
-        image_part = Part(partname, content_type, target_slide.part.package, image_blob)
+        cache_key = (hashlib.sha1(image_blob).hexdigest(), content_type)
+        image_part = cache.get(cache_key)
+        if image_part is None:
+            _media_counter += 1
+            ext = _content_type_to_ext(content_type)
+            media_name = f"image_auto_{_media_counter}{ext}"
+            partname = PackURI(f'/ppt/media/{media_name}')
+            image_part = Part(partname, content_type, package, image_blob)
+            cache[cache_key] = image_part
+
         new_rId = target_slide.part.relate_to(image_part, RT.IMAGE)
         return new_rId
     except (KeyError, AttributeError) as e:
