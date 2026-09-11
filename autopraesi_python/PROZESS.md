@@ -147,18 +147,42 @@ Für jedes der 7 Lieder:
 - Buch "FJ1" → Ordner "FJ1"
 - Buch "FJ" (ohne Nummer) → alle FJ1–FJ6 durchsuchen
 
-### Suchstrategie 1: Nach Nummer
-- Dateiname beginnt mit der Liednummer
-- z.B. Nummer "235" → findet "235 - Jesus dir nach.pptx"
-- Lobpreisstrophen: Buch + Nummer → "FJ1 239 - Immer mehr.pptx"
+### Buch normalisieren
+- "FJ 3", "FJ3" und "fj 3" treffen denselben Ordner (Leerzeichen werden ignoriert)
+- Ohne diese Normalisierung landete "FJ 3 87 - Ich bin bei dir" früher im
+  Fallback und bekam den ersten 87er aus irgendeinem Ordner (FJ1: "Lord you have my heart")
+
+### Suchstrategie 1: Nach Nummer + Titel
+- Dateiname beginnt mit der Liednummer ("235 - …", "235- …", "235 -…", "235-…")
+- Lobpreisstrophen: Buch + Nummer → "FJ1 239 - Immer mehr.pptx" (Buch-Präfix optional)
+- **In den primären Ordnern** ist die Nummer verbindlich. Gibt es mehrere Dateien
+  mit derselben Nummer (z.B. "87 - Lord you have my heart.pptx" und
+  "87 - … - deutsch.pptx"), entscheidet der Titel aus dem Excel
+- **In allen anderen Ordnern** zählt ein Nummern-Treffer nur, wenn auch der Titel
+  passt (jedes Liederbuch hat eine Nr. 87)
+- Rangfolge bei mehreren Kandidaten: Titel passt → primärer Ordner → Ordner-Priorität
+  (Lobpreisstrophen vor FJ1) → vollständigerer Titel → wenigste überzählige Wörter
 
 ### Suchstrategie 2: Nach Titelwörtern
-- Wenn keine Nummer vorhanden (Kinderlieder, Sonstige)
-- Alle 3 ersten Titelwörter müssen im Dateinamen vorkommen
-- z.B. "Gottes große Liebe" → findet "Gottes große Liebe.pptx"
+- Wenn keine Nummer vorhanden (Kinderlieder, Sonstige) oder Strategie 1 nichts liefert
+- Alle 3 ersten Titelwörter müssen als ganze Wörter im Dateinamen vorkommen
+  (ab 4 Zeichen reicht der Wortanfang: "herz" trifft "Herzen"; "ich" trifft NICHT "nicht")
+- Umlaute werden auf NFC normalisiert (Dateinamen aus Dropbox/macOS kommen teils
+  zerlegt an – sonst findet "Höre mich" nie "Höre mich.pptx")
 
-### Fallback
-- Wenn in den primären Ordnern nichts gefunden wird → alle Ordner durchsuchen
+### Prüf-Hinweise (`match_warning`)
+Die API liefert zu jedem Treffer einen Hinweis, der im Frontend als gelber Punkt +
+Text angezeigt wird, wenn der Treffer nicht eindeutig ist:
+- "Titel passt nicht zum Dateinamen" – kein Titelwort passt (z.B. andere Sprachfassung)
+- "Mehrere passende Dateien (auch: …)" – gleich gute Kandidaten im selben Ordner
+- "In anderem Ordner gefunden (…)" – Treffer außerhalb des Buch-/Kategorie-Ordners
+
+### Tests
+```bash
+cd autopraesi_python && venv/bin/python -m unittest -v
+```
+`tests/test_song_finder.py` sichert die Suchlogik gegen einen synthetischen Index ab,
+`tests/test_text_fit.py` die Schriftanpassung gegen das Template.
 
 ---
 
@@ -214,6 +238,15 @@ Für jede Position wird entschieden:
 - "Name des Sonntags" → Kirchenkalender-Name
 - "Begrüßungsvers" → Vers aus Excel
 - "Predigt zu Predigtext1/2" → Bibelstelle + Thema
+
+**Schrift an die Folie anpassen:**
+Begrüßungsvers, Predigt-Thema und Predigt-Bibelstelle sind im Template
+`spAutoFit`-Boxen (Box wächst mit dem Text, Schrift bleibt gleich). Lange Texte
+liefen deshalb unten aus der Folie. Da python-pptx Text nicht messen kann, wird
+der Zeilenumbruch näherungsweise simuliert (`_estimate_line_count`, kalibriert auf
+Baskerville Old Face) und die Schrift in 2pt-Schritten verkleinert, bis der Block
+in den verfügbaren Bereich passt (`_fit_shape_to_slide`), mindestens 24pt
+(Bibelstellen-Zeile 20pt). Beispiel: 215-Zeichen-Vers → 54pt → 42pt.
 
 **Bibeltexte (automatisch geladen):**
 

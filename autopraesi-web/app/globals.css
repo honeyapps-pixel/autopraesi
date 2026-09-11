@@ -82,6 +82,7 @@ body {
 }
 
 .status-dot.found { background: var(--success); }
+.status-dot.warning { background: var(--warning); }
 .status-dot.missing { background: var(--danger); }
 .status-dot.empty { background: var(--text-secondary); opacity: 0.3; }
 

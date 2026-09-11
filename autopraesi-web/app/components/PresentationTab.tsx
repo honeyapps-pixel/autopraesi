@@ -208,8 +208,21 @@ function SlidePreview({
   );
 }
 
-function StatusDot({ status }: { status: "found" | "missing" | "empty" }) {
+function StatusDot({ status }: { status: "found" | "warning" | "missing" | "empty" }) {
   return <span className={`status-dot ${status}`} />;
+}
+
+// Hinweis, wenn ein gefundenes Lied nicht eindeutig zum Excel-Eintrag passt
+// (z.B. anderer Titel im Dateinamen, mehrere Sprachfassungen).
+function MatchWarning({ text, className = "" }: { text: string; className?: string }) {
+  return (
+    <div className={`flex items-start gap-1.5 text-xs text-[var(--warning)] ${className}`}>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0">
+        <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <span>{text}</span>
+    </div>
+  );
 }
 
 // --- Sortable Section Item ---
@@ -360,6 +373,9 @@ function ExtraSongRow({
           <span className="text-xs text-[var(--text-secondary)]">{extra.result.file_name}</span>
         </div>
       )}
+      {!extra.searching && extra.result?.found && extra.result.match_warning && (
+        <MatchWarning text={extra.result.match_warning} className="ml-9" />
+      )}
       {!extra.searching && extra.raw && extra.result && !extra.result.found && (
         <div className="ml-9">
           <span className="text-xs text-[var(--danger)]">Nicht in der Bibliothek gefunden</span>
@@ -388,26 +404,28 @@ function SongTable({
   return (
     <div className="space-y-2">
       {songs.map((s) => (
-        <div
-          key={s.slot_key}
-          className="flex items-center gap-3 py-2 px-3 rounded-xl bg-white/50"
-        >
-          <span className="text-xs font-medium text-[var(--text-secondary)] w-6">
-            {songLabel(s.slot_key)}
-          </span>
-          <StatusDot
-            status={!s.raw ? "empty" : s.found ? "found" : "missing"}
-          />
-          <input
-            className="input-field flex-1"
-            defaultValue={s.raw}
-            placeholder="z.B. FJ1 77 - Komm in unser dürres Leben"
-            onChange={(e) => onSongChange?.(s.slot_key, e.target.value)}
-          />
-          {s.found && (
-            <span className="text-xs text-[var(--text-secondary)] hidden sm:block truncate max-w-[180px]">
-              {s.file_name}
+        <div key={s.slot_key} className="py-2 px-3 rounded-xl bg-white/50">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium text-[var(--text-secondary)] w-6">
+              {songLabel(s.slot_key)}
             </span>
+            <StatusDot
+              status={!s.raw ? "empty" : s.found ? (s.match_warning ? "warning" : "found") : "missing"}
+            />
+            <input
+              className="input-field flex-1"
+              defaultValue={s.raw}
+              placeholder="z.B. FJ1 77 - Komm in unser dürres Leben"
+              onChange={(e) => onSongChange?.(s.slot_key, e.target.value)}
+            />
+            {s.found && (
+              <span className="text-xs text-[var(--text-secondary)] hidden sm:block truncate max-w-[180px]">
+                {s.file_name}
+              </span>
+            )}
+          </div>
+          {s.found && s.match_warning && (
+            <MatchWarning text={`${s.match_warning} · Datei: ${s.file_name}`} className="mt-1 ml-9" />
           )}
         </div>
       ))}

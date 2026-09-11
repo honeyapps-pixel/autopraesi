@@ -33,6 +33,8 @@ export interface SongStatus {
   title: string;
   found: boolean;
   file_name: string;
+  /** Prüf-Hinweis, wenn der Treffer nicht eindeutig zum Excel-Eintrag passt */
+  match_warning?: string;
 }
 
 export interface InvitationEvent {
@@ -152,6 +154,7 @@ export interface SongSearchResult {
   found: boolean;
   file_name: string;
   path: string;
+  match_warning?: string;
 }
 
 export async function searchSong(raw: string): Promise<SongSearchResult> {

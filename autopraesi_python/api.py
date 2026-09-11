@@ -18,7 +18,7 @@ from config import (IMAGE_DIR, OUTPUT_DIR_DROPBOX, GODI_PLAN_DIR,
                     TOGGLEABLE_SECTIONS, DEFAULT_SECTION_ORDER)
 from excel_reader import (list_all_sheets, read_godi_plan_by_sheet, GodiPlanData,
                           parse_song_entry, find_godi_plan_excel, _is_godi_plan)
-from song_finder import build_song_index, find_song
+from song_finder import build_song_index, find_song, find_song_detailed
 from presentation_builder import build_presentation
 import godi_editor
 
@@ -99,6 +99,9 @@ class SongStatus(BaseModel):
     title: str
     found: bool
     file_name: str
+    # Prüf-Hinweis, wenn der Treffer nicht eindeutig zum Excel-Eintrag passt
+    # (z.B. Titel passt nicht zum Dateinamen, mehrere Sprachfassungen)
+    match_warning: str = ""
 
 
 class SectionInfo(BaseModel):
@@ -173,7 +176,7 @@ def get_sheet_data(sheet_name: str, excel_path: str):
     index = _get_song_index()
     songs = []
     for song in data.songs:
-        path = find_song(song, index)
+        match = find_song_detailed(song, index)
         songs.append(SongStatus(
             slot_key=song.slot_key,
             raw=song.raw,
@@ -181,8 +184,9 @@ def get_sheet_data(sheet_name: str, excel_path: str):
             book=song.book,
             number=song.number,
             title=song.title,
-            found=path is not None,
-            file_name=os.path.basename(path) if path else "",
+            found=match.path is not None,
+            file_name=match.file_name,
+            match_warning=match.warning,
         ))
 
     image_path = _find_image(data.date_str)
@@ -252,11 +256,12 @@ def search_song(raw: str):
         return {"found": False, "file_name": "", "path": ""}
     song = parse_song_entry(raw.strip())
     index = _get_song_index()
-    path = find_song(song, index)
+    match = find_song_detailed(song, index)
     return {
-        "found": path is not None,
-        "file_name": os.path.basename(path) if path else "",
-        "path": path or "",
+        "found": match.path is not None,
+        "file_name": match.file_name,
+        "path": match.path or "",
+        "match_warning": match.warning,
     }
 
 

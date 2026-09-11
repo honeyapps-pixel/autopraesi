@@ -848,6 +848,133 @@ def _fix_title_overflow(shape):
         log.debug(f"_fix_title_overflow fehlgeschlagen: {e}")
 
 
+# --- Schrift an die Folie anpassen -------------------------------------------
+# Textboxen wie der Begrüßungsvers haben im Template spAutoFit: die Box wächst
+# mit dem Text, die Schrift bleibt 54pt. Ein langer Vers läuft so über den
+# unteren Folienrand hinaus (PowerPoint schneidet nichts ab). Da python-pptx
+# keinen Text messen kann, wird der Zeilenumbruch hier näherungsweise simuliert
+# und die Schriftgröße so weit verkleinert, bis der Block in die Folie passt.
+
+# Mittlere Zeichenbreite relativ zur Schriftgröße (Baskerville Old Face,
+# gemischter Fließtext). Kalibriert am Fehlerbild vom 13.9.2026: bei 54pt
+# passten max. 23 Zeichen in die 18,7cm breite Zeile → ~0,43 em; 0,45 als
+# kleine Reserve (zu breit geschätzt = eher etwas kleiner = sicher).
+_AVG_CHAR_WIDTH_EM = 0.45
+# Zeilenhöhe relativ zur Schriftgröße (bei 100% Zeilenabstand)
+_LINE_HEIGHT_EM = 1.2
+_EMU_PER_PT = 12700
+
+
+def _estimate_line_count(text: str, width_pt: float, font_pt: float) -> int:
+    """Schätzt, auf wie viele Zeilen ein Text bei gegebener Breite umbricht."""
+    max_chars = max(1, int(width_pt / (font_pt * _AVG_CHAR_WIDTH_EM)))
+    lines = 0
+    for para in text.replace("\v", "\n").split("\n"):
+        lines += 1
+        line_len = 0
+        for word in para.split():
+            need = len(word) if line_len == 0 else line_len + 1 + len(word)
+            if need > max_chars and line_len > 0:
+                lines += 1
+                line_len = len(word)
+            else:
+                line_len = need
+            # Überlange Wörter brechen zeichenweise um
+            while line_len > max_chars:
+                lines += 1
+                line_len -= max_chars
+    return max(1, lines)
+
+
+def _shape_font_pt(shape) -> float:
+    """Größte gesetzte Schriftgröße (pt) im Shape, 0 wenn keine gesetzt ist."""
+    sizes = [run.font.size.pt
+             for para in shape.text_frame.paragraphs
+             for run in para.runs if run.font.size]
+    return max(sizes) if sizes else 0
+
+
+def _set_shape_font_pt(shape, pt: float):
+    """Setzt die Schriftgröße auf alle Runs (inkl. endParaRPr) des Shapes."""
+    from pptx.util import Pt
+    for para in shape.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(pt)
+        end = para._p.find(qn('a:endParaRPr'))
+        if end is not None:
+            end.set('sz', str(int(pt * 100)))
+
+
+def _estimate_text_height_pt(shape, font_pt: float) -> float:
+    """Schätzt die Höhe (pt) des Textblocks bei gegebener Schriftgröße."""
+    txBody = shape.text_frame._txBody
+    bodyPr = txBody.find(qn('a:bodyPr'))
+    ins = {k: int(bodyPr.get(k, 91440)) for k in ("lIns", "rIns", "tIns", "bIns")} \
+        if bodyPr is not None else {k: 91440 for k in ("lIns", "rIns", "tIns", "bIns")}
+    width_pt = (shape.width - ins["lIns"] - ins["rIns"]) / _EMU_PER_PT
+
+    total_lines = 0
+    spacing_after_pt = 0.0
+    line_factor = 1.0
+    for para in shape.text_frame.paragraphs:
+        total_lines += _estimate_line_count(para.text, width_pt, font_pt)
+        pPr = para._p.find(qn('a:pPr'))
+        if pPr is not None:
+            pct = pPr.find(qn('a:lnSpc') + '/' + qn('a:spcPct'))
+            if pct is not None and pct.get('val'):
+                line_factor = int(pct.get('val')) / 100000
+            aft = pPr.find(qn('a:spcAft') + '/' + qn('a:spcPts'))
+            if aft is not None and aft.get('val'):
+                spacing_after_pt += int(aft.get('val')) / 100
+
+    text_height = total_lines * font_pt * _LINE_HEIGHT_EM * line_factor
+    return text_height + spacing_after_pt + (ins["tIns"] + ins["bIns"]) / _EMU_PER_PT
+
+
+def _fit_text_in_height(shape, max_height_emu: int, min_pt: float = 24, step: float = 2):
+    """Verkleinert die Schrift schrittweise, bis der Text in max_height passt.
+
+    Ändert nichts, wenn der Text bereits passt oder keine Schriftgröße gesetzt
+    ist. Geht nie unter min_pt (lieber leicht überstehen als unlesbar).
+    """
+    if not shape.has_text_frame or not shape.text_frame.text.strip():
+        return
+    start_pt = _shape_font_pt(shape)
+    if not start_pt:
+        return
+    pt = start_pt
+    while pt - step >= min_pt and \
+            _estimate_text_height_pt(shape, pt) * _EMU_PER_PT > max_height_emu:
+        pt -= step
+    if pt != start_pt:
+        _set_shape_font_pt(shape, pt)
+        log.info(f"Schrift verkleinert {start_pt:g}pt → {pt:g}pt, damit der Text "
+                 f"auf die Folie passt ({len(shape.text_frame.text)} Zeichen)")
+
+
+def _fit_shape_to_slide(slide, shape, bottom_limit_emu: int = None,
+                        margin_cm: float = 0.8, min_pt: float = 24):
+    """Passt die Schrift eines Shapes so an, dass es nicht über die Folie
+    (bzw. über bottom_limit) hinausragt. Die Box wächst danach nur noch
+    innerhalb dieses Bereichs (spAutoFit bleibt erhalten).
+    """
+    from pptx.util import Cm
+    slide_height = slide.part.package.presentation_part.presentation.slide_height
+    limit = bottom_limit_emu if bottom_limit_emu is not None else slide_height
+    max_height = int(limit - Cm(margin_cm) - shape.top)
+    if max_height <= 0:
+        return
+    _fit_text_in_height(shape, max_height, min_pt=min_pt)
+
+
+def _find_shape_with_text(slide, text: str):
+    """Erstes Shape der Folie, dessen Text den gegebenen Text enthält."""
+    for shape in slide.shapes:
+        if shape.has_text_frame and text and text in shape.text_frame.text:
+            return shape
+    return None
+
+
 def _build_standard_rPr(sz, lang='de-DE', baseline=None):
     """Erzeugt ein standardisiertes rPr-Element (identisch für alle Folien).
 
@@ -1055,6 +1182,10 @@ def _fill_slide_simple(slide, data, is_template=True):
 
     if "Begrüßungsvers" in slide_text and data.greeting_verse:
         _replace_text_in_slide(slide, "Begrüßungsvers", data.greeting_verse)
+        # Lange Verse: Schrift verkleinern statt über den Folienrand zu laufen
+        shape = _find_shape_with_text(slide, data.greeting_verse)
+        if shape is not None:
+            _fit_shape_to_slide(slide, shape)
 
     if "Gottesdienst am XY.XY.XY" in slide_text:
         _replace_text_in_slide(slide, "Thema", data.theme)
@@ -1070,11 +1201,13 @@ def _fill_slide_simple(slide, data, is_template=True):
         _replace_text_in_slide(slide, "Predigt zu Predigtext1",
                                f"Predigt zu {data.predigt1_reference}")
         _replace_text_in_slide(slide, "Thema Predigt1", data.predigt1_title)
+        _fit_predigt_slide(slide, data.predigt1_title, data.predigt1_reference)
 
     if "Predigt zu Predigttext2" in slide_text:
         _replace_text_in_slide(slide, "Predigt zu Predigttext2",
                                f"Predigt zu {data.predigt2_reference}")
         _replace_text_in_slide(slide, "Predigtthema 2", data.predigt2_title)
+        _fit_predigt_slide(slide, data.predigt2_title, data.predigt2_reference)
 
     # Text-Schatten nur auf Template-Folien (nicht auf reinkopierte Lieder etc.)
     if is_template:
@@ -1083,6 +1216,18 @@ def _fill_slide_simple(slide, data, is_template=True):
     # Lied-Folien: Liedtext auf 32pt anpassen (Header bleibt unverändert)
     if not is_template:
         _adjust_song_text_size(slide)
+
+
+def _fit_predigt_slide(slide, title: str, reference: str):
+    """Predigt-Folie: Thema (oben) darf nicht in die Bibelstellen-Zeile (unten)
+    laufen, die Bibelstellen-Zeile nicht über den Folienrand."""
+    ref_shape = _find_shape_with_text(slide, f"Predigt zu {reference}") if reference else None
+    title_shape = _find_shape_with_text(slide, title) if title else None
+    if title_shape is not None:
+        limit = ref_shape.top if ref_shape is not None else None
+        _fit_shape_to_slide(slide, title_shape, bottom_limit_emu=limit, margin_cm=0.3)
+    if ref_shape is not None:
+        _fit_shape_to_slide(slide, ref_shape, margin_cm=0.3, min_pt=20)
 
 
 def _update_page_number(slide, current_page, total_pages):
