@@ -571,6 +571,23 @@ export default function PresentationTab() {
         const d = await getSheetData(sheet.name, sheet.excel_path);
         setData(d);
 
+        // Abschnitte, für die die Excel nichts vorsieht, standardmäßig abwählen
+        // (sonst bleibt z.B. die Platzhalter-Folie "Lied5" in der Präsentation).
+        // Lassen sich in der Abschnittsliste jederzeit wieder einschalten.
+        const sectionKeys = new Set(sections.map((s) => s.key));
+        const emptySections = d.songs
+          .filter((s) => /^song[1-7]$/.test(s.slot_key) && !s.raw.trim())
+          .map((s) => s.slot_key);
+        if (!d.predigt2_reference.trim() && !d.predigt2_title.trim()) emptySections.push("predigt2");
+        if (!d.lesung_reference.trim()) emptySections.push("lesung");
+        if (!d.greeting_verse.trim()) emptySections.push("begruessung");
+        if (d.layout === "samstag") emptySections.push("kinderstunde");
+        setSectionToggles((prev) => {
+          const next = { ...prev };
+          emptySections.filter((k) => sectionKeys.has(k)).forEach((k) => (next[k] = false));
+          return next;
+        });
+
         // Events mit stabilen IDs initialisieren
         setEventRows(
           d.invitation_events.map((e) => {
@@ -613,12 +630,28 @@ export default function PresentationTab() {
     [sections]
   );
 
+  // Wird ein anfangs leerer (und daher abgewählter) Abschnitt nachträglich befüllt,
+  // schaltet er sich wieder ein.
+  const enableSection = (key: string) => {
+    if (!sections.some((s) => s.key === key)) return;
+    setSectionToggles((prev) => (prev[key] === false ? { ...prev, [key]: true } : prev));
+  };
+
+  const OVERRIDE_SECTION: Record<string, string> = {
+    greeting_verse: "begruessung",
+    lesung_reference: "lesung",
+    predigt2_reference: "predigt2",
+    predigt2_title: "predigt2",
+  };
+
   const handleOverride = (key: string, value: string) => {
     setOverrides((prev) => ({ ...prev, [key]: value }));
+    if (value.trim() && OVERRIDE_SECTION[key]) enableSection(OVERRIDE_SECTION[key]);
   };
 
   const handleSongOverride = (slot: string, value: string) => {
     setSongOverrides((prev) => ({ ...prev, [slot]: value }));
+    if (value.trim()) enableSection(slot);
   };
 
   const handleImageUpload = async (file: File) => {

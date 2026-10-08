@@ -8,6 +8,7 @@ import copy
 import hashlib
 import logging
 import os
+import re
 
 from lxml import etree
 from pptx import Presentation
@@ -135,6 +136,8 @@ def _copy_shape(new_slide, shape, source_slide, is_song=False):
         # Placeholder-Geometrie explizit setzen (Position/Größe)
         # damit Shapes nicht von einem falschen Layout erben
         _resolve_placeholder_geometry(new_el, shape)
+    else:
+        _remap_song_placeholder(new_el, shape, new_slide.slide_layout)
 
     # Bild-Relationen aktualisieren
     blips = new_el.findall('.//{%s}blip' % nsmap['a'])
@@ -146,6 +149,40 @@ def _copy_shape(new_slide, shape, source_slide, is_song=False):
                 blip.set('{%s}embed' % nsmap['r'], new_rId)
 
     new_slide.shapes._spTree.append(new_el)
+
+
+# Seitenzahl ("1 / 3") bzw. Quellenangabe ("Text: …", "Melodie: …") auf Lied-Folien
+_PAGE_RE = re.compile(r'^\s*\d+\s*/\s*\d+\s*$')
+_CREDIT_RE = re.compile(r'^\s*(text|melodie|musik|worte|weise)\b', re.IGNORECASE)
+
+
+def _remap_song_placeholder(new_el, shape, layout):
+    """Hängt Seitenzahl/Quellenangabe an den passenden Platzhalter des Template-Layouts.
+
+    Lied-Folien erben ihre Positionen vom Song-Layout des Templates (einheitlicher Stil).
+    Die meisten Lied-Dateien nutzen dafür die Standard-Platzhalter (Fußzeile = Quellen,
+    Foliennummer = "1 / 3"). Ältere Dateien (z.B. "Sonstige Lieder/Gottes guter Segen")
+    haben die Rollen auf anderen Platzhalter-Indizes – ohne Umhängen landete die
+    Quellenangabe im winzigen Foliennummern-Feld und überlagerte den Liedtext.
+    """
+    ph = new_el.find('.//p:nvSpPr/p:nvPr/p:ph', nsmap)
+    if ph is None or not shape.has_text_frame:
+        return
+    text = shape.text_frame.text
+    if _PAGE_RE.match(text):
+        role = 'sldNum'
+    elif _CREDIT_RE.match(text):
+        role = 'ftr'
+    else:
+        return
+    if ph.get('type') == role:
+        return
+    for layout_ph in layout.placeholders:
+        lph = layout_ph._element.find('.//p:nvSpPr/p:nvPr/p:ph', nsmap)
+        if lph is not None and lph.get('type') == role:
+            ph.set('type', role)
+            ph.set('idx', lph.get('idx', '0'))
+            return
 
 
 def _resolve_placeholder_geometry(new_el, shape):

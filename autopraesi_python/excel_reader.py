@@ -5,7 +5,7 @@ import io
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, time
 from typing import Optional
 
 import openpyxl
@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 # (ohne Alpha), und Zellfarben werden – egal ob als rgb ODER indexed gespeichert – auf RGB
 # aufgelöst. So werden Lieder auch erkannt, wenn die Excel-Zelle eine indizierte Farbe
 # nutzt (z.B. Index 42 = CCFFCC) statt der Theme-Farbe C5E0B4.
-SONG_COLORS    = {"C5E0B4", "CCFFCC", "C6EFCE"}  # Grüntöne  → Lied
+SONG_COLORS    = {"C5E0B4", "CCFFCC", "C6EFCE", "99CC00"}  # Grüntöne → Lied (99CC00 = Sa-Layout)
 PREDIGT_COLORS = {"FFA7A7", "FFC7CE"}            # Rottöne   → Predigt-Bibelstelle
 LESUNG_COLORS  = {"F8CBAD", "FCE4D6"}            # Orangetöne → Lesung-Bibelstelle
 
@@ -37,9 +37,20 @@ _SONG_BOOKS = re.compile(
 _SONG_PREFIXES = ("lobpreisstrophe:", "kinderlied:", "sonstige lieder")
 
 # Muster für eine einzelne Bibelstelle (kein Semikolon = keine Liste)
+# ("Joel 3,1-2", "5. Mose 8,7", "2 Samuel 7, 17-26")
 _BIBLE_REF = re.compile(
-    r'^((?:\d\.\s*)?[A-Za-zäöüÄÖÜß]+)\s+\d+',
+    r'^((?:\d\.?\s*)?[A-Za-zäöüÄÖÜß]+)\s+\d+',
 )
+
+# Spalte-B-Beschriftungen, deren Inhalt ein Gemeindelied ist – auch ohne grüne Zellfarbe
+# (z.B. "Sonstige Lieder - …" mit Theme-Farbe). "Liedbeitrag" (Vortrag) zählt bewusst nicht.
+_SONG_LABELS = ("gemeindelied", "lobpreisstrophe", "kinderlied", "schlusslied", "liedstrophe")
+
+# Datumszelle in den Abkündigungen: "Di 13.10.26", "So 11.10.2026"
+_ANNOUNCEMENT_DATE = re.compile(r'^\s*[A-Za-zÄÖÜäöü]{2,3}\.?\s+\d{1,2}\.\d{1,2}\.')
+
+# Beginn eines Zitats (Begrüßungsvers steht in Anführungszeichen)
+_QUOTE_CHARS = ('"', '„', '“', '”', '‚', "'", '»', '«')
 
 
 @dataclass
@@ -80,6 +91,7 @@ class GodiPlanData:
     songs: list = field(default_factory=list)  # 7 SongEntry-Objekte
     announcements: list = field(default_factory=list)  # Abkündigungen
     invitation_events: list = field(default_factory=list)  # List[InvitationEvent]
+    layout: str = "sonntag"         # "sonntag" (Inhalte in Spalte D) | "samstag" (Spalte C)
 
 
 def _norm_rgb6(fg) -> Optional[str]:
@@ -139,8 +151,12 @@ def _looks_like_single_bible_ref(val: str) -> bool:
     return bool(_BIBLE_REF.match(val.strip()))
 
 
-def _scan_by_color(ws) -> tuple:
+def _scan_by_color(ws, col: int = 4) -> tuple:
     """Scannt das Arbeitsblatt nach Farben und extrahiert Lieder und Bibelstellen.
+
+    ``col`` ist die Inhaltsspalte (Sonntags-Layout: D, Samstags-Layout: C). Ein Lied wird
+    auch ohne grüne Farbe erkannt, wenn Spalte B es als Lied beschriftet (z.B.
+    "Gemeindelied") und der Text wie ein Lied aussieht.
 
     Returns:
         (song_raws, lesung_ref, predigt_refs)
@@ -153,12 +169,13 @@ def _scan_by_color(ws) -> tuple:
     predigt_refs = []
 
     for row in range(1, ws.max_row + 1):
-        cell = ws.cell(row=row, column=4)
+        cell = ws.cell(row=row, column=col)
         color = _get_cell_color(cell)
-        val = str(cell.value).strip() if cell.value else ""
+        val = _text(cell.value)
+        col_b = _text(ws.cell(row=row, column=2).value)
+        song_label = col_b.lower().startswith(_SONG_LABELS)
 
-        if color in SONG_COLORS and _looks_like_song(val):
-            col_b = str(ws.cell(row=row, column=2).value or "").strip()
+        if (color in SONG_COLORS or song_label) and _looks_like_song(val):
             song_raws.append((row, val, col_b))
             log.debug(f"Farb-Scan: Lied in Zeile {row}: {val[:60]} (B={col_b})")
 
@@ -171,6 +188,131 @@ def _scan_by_color(ws) -> tuple:
             log.debug(f"Farb-Scan: Predigt-Ref in Zeile {row}: {val}")
 
     return song_raws, lesung_ref, predigt_refs
+
+
+def _text(val) -> str:
+    """Zellwert als bereinigter Text; Uhrzeiten/Datumswerte und leere Zellen → ""."""
+    if val is None or isinstance(val, (time, datetime)):
+        return ""
+    return str(val).strip()
+
+
+def _strip_placeholder(val) -> str:
+    """Zellwert ohne Vorlagen-Präfix: "Text: Psalm 25,5" → "Psalm 25,5", "Titel: " → ""."""
+    txt = _text(val)
+    return re.sub(r'^(text|titel)\s*:\s*', '', txt, flags=re.IGNORECASE).strip()
+
+
+def _fmt_time(val) -> str:
+    """Uhrzeit-Zelle → "HH:MM" (datetime.time oder Text "19:00:00")."""
+    if hasattr(val, "strftime"):
+        return val.strftime("%H:%M")
+    txt = str(val).strip() if val is not None else ""
+    if re.match(r'^\d{1,2}:\d{2}:\d{2}$', txt):
+        return txt[:-3]
+    return txt
+
+
+def _find_label_row(ws, prefix: str, col: int = 1, max_row: int = 15,
+                    exact: bool = False) -> Optional[int]:
+    """Erste Zeile, deren Beschriftung (Spalte ``col``) mit ``prefix`` beginnt.
+
+    ``exact``: Beschriftung muss (ohne ":") genau ``prefix`` sein – unterscheidet
+    "Predigttext:" (Sa-Layout) von "Predigttextvorschläge:" (So-Layout).
+    """
+    for row in range(1, min(ws.max_row, max_row) + 1):
+        label = _text(ws.cell(row=row, column=col).value).lower().rstrip(":").strip()
+        if (label == prefix) if exact else label.startswith(prefix):
+            return row
+    return None
+
+
+def _detect_content_col(ws) -> int:
+    """Inhaltsspalte des Sheets: D (4) im Sonntags-Layout, C (3) im Samstags-Layout.
+
+    Das Samstags-Sheet ist schmaler: Thema/Leitung/Lieder stehen in Spalte C statt D.
+    """
+    for prefix in ("thema", "godi-leitung", "verkündigung"):
+        row = _find_label_row(ws, prefix)
+        if row:
+            if _text(ws.cell(row=row, column=4).value):
+                return 4
+            if _text(ws.cell(row=row, column=3).value):
+                return 3
+    # Noch unbefülltes Sheet: Sa-Layout hat "Predigttext:", So-Layout "Predigttextvorschläge:"
+    return 3 if _find_label_row(ws, "predigttext", exact=True) else 4
+
+
+def _find_announcement_anchor(ws) -> Optional[int]:
+    """Zeile mit "Abkündigungen" in Spalte B (Beginn des Termin-Blocks)."""
+    for row in range(1, ws.max_row + 1):
+        if _text(ws.cell(row=row, column=2).value).lower().startswith("abkündigungen"):
+            return row
+    return None
+
+
+def _find_greeting(ws, col: int, end_row: int) -> str:
+    """Begrüßungsvers: Inhalt der Zeile "Begrüßung" oder erstes Zitat vor der Predigt.
+
+    Die Zeile wandert zwischen den Quartalen (16, 17, 18 …) und vor ihr kann z.B. ein
+    "Liedbeitrag" stehen – daher nicht mehr über eine feste Zeile.
+    """
+    for row in range(10, end_row):
+        label = _text(ws.cell(row=row, column=2).value).lower()
+        val = _text(ws.cell(row=row, column=col).value)
+        if label.startswith("begrüßung") and val and not _looks_like_song(val):
+            return val
+    for row in range(10, end_row):
+        val = _text(ws.cell(row=row, column=col).value)
+        if val.startswith(_QUOTE_CHARS):
+            return val
+    return ""
+
+
+def _read_announcement_block(ws, anchor: int) -> tuple[list, list]:
+    """Liest Abkündigungen + Einladungs-Termine ab der "Abkündigungen"-Zeile.
+
+    Die Termin-Spalten werden je Zeile über die Datumszelle erkannt (So-Layout: B, Sa-Layout:
+    C, dort ggf. schon in der Abkündigungen-Zeile selbst). Daneben stehen Uhrzeit,
+    Veranstaltung und (So-Layout) in Spalte F ein Hinweis. Eine Zeile ohne Datum, aber mit
+    Uhrzeit (zweiter Termin am selben Tag) übernimmt das Datum der Vorzeile.
+    Der Block endet bei "Ausblick", "Danke an", dem Schlusslied oder "Nach dem GoDi".
+    """
+    announcements: list[str] = []
+    events: list[InvitationEvent] = []
+    date_col = None
+    last_date = ""
+    stop = ("ausblick", "danke an", "nach dem godi") + _SONG_LABELS
+    for row in range(anchor, min(ws.max_row, anchor + 14) + 1):
+        col_a = _text(ws.cell(row=row, column=1).value).lower()
+        col_b = _text(ws.cell(row=row, column=2).value).lower()
+        if row > anchor and (col_b.startswith(stop) or col_a.startswith("nach dem godi")):
+            break
+        for c in (2, 3):
+            if _ANNOUNCEMENT_DATE.match(_text(ws.cell(row=row, column=c).value)):
+                date_col = c
+                break
+        else:
+            if date_col is None:
+                continue
+        datum = _text(ws.cell(row=row, column=date_col).value)
+        if not _ANNOUNCEMENT_DATE.match(datum):
+            datum = ""
+        zeit = _fmt_time(ws.cell(row=row, column=date_col + 1).value)
+        event = _text(ws.cell(row=row, column=date_col + 2).value)
+        note = ""
+        if date_col + 4 <= 6:  # Hinweis-Spalte F nur im So-Layout (Sa: dort Kürzel)
+            note = _text(ws.cell(row=row, column=date_col + 4).value)
+        if not event or not (datum or zeit):
+            continue
+        if datum:
+            last_date = datum
+        elif not last_date:
+            continue
+        announcements.append(" | ".join(p for p in (datum or last_date, zeit, event, note) if p))
+        events.append(InvitationEvent(date_str=datum or last_date, time_str=zeit,
+                                      event_name=event, note=note))
+    return announcements, events
 
 
 def parse_song_entry(raw: str, slot_key: str = "", col_b: str = "") -> SongEntry:
@@ -338,9 +480,13 @@ def _assign_songs_to_slots(song_raws: list) -> list:
     return result
 
 
-def _parse_header(header: str) -> tuple:
+def _parse_header(header: str, excel_path: str = "") -> tuple:
     """Extrahiert Datum und Kirchenkalendername aus dem Header.
     'Gottesdienst am 08.03.2026 (Okuli)' → ('08.03.2026', 'Okuli')
+
+    Fehlt im Header das Jahr ('Gottesdienst am Samstag 03.10.'), wird es aus dem
+    Dateinamen des Plans ergänzt ('GoDi-Plan 2026_Q4.xlsx'; Januar/Februar in einem
+    Q4-Plan gehören ins Folgejahr).
     """
     date_str = ""
     kirche = ""
@@ -348,10 +494,19 @@ def _parse_header(header: str) -> tuple:
     if not header:
         return date_str, kirche
 
-    # Datum extrahieren: DD.MM.YYYY
-    m = re.search(r'(\d{2}\.\d{2}\.\d{4})', header)
+    # Datum extrahieren: DD.MM.YYYY (auch einstellige Tage/Monate)
+    m = re.search(r'(\d{1,2})\.(\d{1,2})\.(\d{4})?', header)
     if m:
-        date_str = m.group(1)
+        day, month, year = int(m.group(1)), int(m.group(2)), m.group(3)
+        if not year:
+            fm = re.search(r'(20\d{2})_(Q?\d)', excel_path)
+            if fm:
+                y = int(fm.group(1))
+                if fm.group(2).upper().lstrip("Q") == "4" and month <= 2:
+                    y += 1
+                year = str(y)
+        if year and 1 <= day <= 31 and 1 <= month <= 12:
+            date_str = f"{day:02d}.{month:02d}.{year}"
 
     # Kirchenkalender extrahieren: (Name)
     m = re.search(r'\(([^)]+)\)', header)
@@ -428,6 +583,24 @@ def list_all_sheets() -> list[tuple[str, str]]:
     return results
 
 
+def _read_fixed_announcements(ws, data: GodiPlanData) -> None:
+    """Alter Weg für Sheets ohne "Abkündigungen"-Beschriftung: feste Zeilen aus config."""
+    for row_num in ABKUENDIGUNGEN_ROWS:
+        parts = [_fmt_time(v) for v in (ws.cell(row=row_num, column=c).value for c in range(2, 6)) if v]
+        if parts:
+            data.announcements.append(" | ".join(parts))
+    for row_num in range(EINLADUNG_ROW_START, EINLADUNG_ROW_END + 1):
+        datum_str = _text(ws.cell(row=row_num, column=EINLADUNG_COLS["datum"]).value)
+        event_str = _text(ws.cell(row=row_num, column=EINLADUNG_COLS["veranstaltung"]).value)
+        if datum_str and event_str:
+            data.invitation_events.append(InvitationEvent(
+                date_str=datum_str,
+                time_str=_fmt_time(ws.cell(row=row_num, column=EINLADUNG_COLS["uhrzeit"]).value),
+                event_name=event_str,
+                note=_text(ws.cell(row=row_num, column=EINLADUNG_COLS["hinweis"]).value),
+            ))
+
+
 def read_godi_plan_by_sheet(sheet_name: str, excel_path: str) -> GodiPlanData | None:
     """Liest den GoDi-Plan für ein beliebiges Sheet.
 
@@ -451,45 +624,74 @@ def read_godi_plan_by_sheet(sheet_name: str, excel_path: str) -> GodiPlanData | 
         return None
 
     def cell(key: str) -> str:
-        """Liest eine Zelle anhand des Schlüssels aus EXCEL_ROWS."""
+        """Liest eine Zelle anhand des Schlüssels aus EXCEL_ROWS.
+
+        Leere Vorlagen-Platzhalter ("Text:", "Titel:") zählen als leer, ebenso Zellen in
+        einer Zeile, die Spalte B als "Abendmahl" ausweist (Q4: statt "Predigt 2").
+        """
         row, col = EXCEL_ROWS[key]
-        val = ws.cell(row=row, column=col).value
-        return str(val).strip() if val else ""
+        if _text(ws.cell(row=row, column=2).value).lower().startswith("abendmahl"):
+            return ""
+        return _strip_placeholder(ws.cell(row=row, column=col).value)
 
     data = GodiPlanData()
 
-    # Header und Metadaten (feste Positionen, da diese sich selten verschieben)
-    data.service_header = cell("header")
-    data.theme = cell("theme")
-    data.date_str, data.kirchenkalender = _parse_header(data.service_header)
+    # Layout erkennen: Sonntags-Sheets haben die Inhalte in Spalte D, die schmaleren
+    # Samstags-Sheets in Spalte C. Zeilen verschieben sich zwischen den Quartalen,
+    # daher wird überall zuerst über Beschriftungen/Farben gesucht und nur im
+    # Sonntags-Layout (validiert) auf die festen Zeilen aus EXCEL_ROWS zurückgefallen.
+    col = _detect_content_col(ws)
+    compact = col == 3
+    if compact:
+        data.layout = "samstag"
+        log.info("Samstags-Layout erkannt (Inhalte in Spalte C)")
 
-    # Begrüßungsvers
-    data.greeting_verse = cell("begruessung")
+    def label_value(prefix: str, *, exact: bool = False) -> str:
+        row = _find_label_row(ws, prefix, exact=exact)
+        return _text(ws.cell(row=row, column=col).value) if row else ""
+
+    anchor = _find_announcement_anchor(ws)
+    body_end = anchor or min(ws.max_row, 40)
+
+    # Header und Metadaten
+    data.service_header = cell("header")
+    data.theme = label_value("thema") or ("" if compact else cell("theme"))
+    data.date_str, data.kirchenkalender = _parse_header(data.service_header, excel_path)
+
+    # Begrüßungsvers (Zeile wandert je nach Plan → über Beschriftung/Zitat suchen)
+    data.greeting_verse = _find_greeting(ws, col, body_end)
 
     # === Farb-basierter Scan für Lieder und Bibelstellen ===
-    song_raws, lesung_ref_color, predigt_refs_color = _scan_by_color(ws)
+    song_raws, lesung_ref_color, predigt_refs_color = _scan_by_color(ws, col)
 
-    # Bibelstellen: Farb-Scan bevorzugt, Fallback auf feste Zeilen
+    # Bibelstellen: Farb-Scan bevorzugt, Fallback auf Beschriftung bzw. feste Zeilen
     if lesung_ref_color:
         data.lesung_reference = lesung_ref_color
         log.info(f"Lesung (Farbe erkannt): {lesung_ref_color}")
     else:
-        data.lesung_reference = cell("lesung_referenz")
-        log.warning("Lesung: Farb-Erkennung fehlgeschlagen, nutze feste Zeile")
+        lesung = label_value("lesungstext")
+        data.lesung_reference = lesung if _looks_like_single_bible_ref(lesung) else ""
+        if not data.lesung_reference:
+            log.warning("Lesung: keine Bibelstelle gefunden")
 
-    if len(predigt_refs_color) >= 1:
-        data.predigt1_reference = predigt_refs_color[0]
-        log.info(f"Predigt1 (Farbe erkannt): {predigt_refs_color[0]}")
+    if compact:
+        # Sa-Layout: eine Predigt, Bibelstelle in der Kopfzeile "Predigttext:"
+        ref = label_value("predigttext", exact=True)
+        data.predigt1_reference = ref if _looks_like_single_bible_ref(ref) else (
+            predigt_refs_color[0] if predigt_refs_color else "")
     else:
-        data.predigt1_reference = cell("predigt1_referenz")
-        log.warning("Predigt1: Farb-Erkennung fehlgeschlagen, nutze feste Zeile")
+        if len(predigt_refs_color) >= 1:
+            data.predigt1_reference = predigt_refs_color[0]
+            log.info(f"Predigt1 (Farbe erkannt): {predigt_refs_color[0]}")
+        elif _looks_like_single_bible_ref(cell("predigt1_referenz")):
+            data.predigt1_reference = cell("predigt1_referenz")
+            log.warning("Predigt1: Farb-Erkennung fehlgeschlagen, nutze feste Zeile")
 
-    if len(predigt_refs_color) >= 2:
-        data.predigt2_reference = predigt_refs_color[1]
-        log.info(f"Predigt2 (Farbe erkannt): {predigt_refs_color[1]}")
-    else:
-        data.predigt2_reference = cell("predigt2_referenz")
-        if len(predigt_refs_color) < 2:
+        if len(predigt_refs_color) >= 2:
+            data.predigt2_reference = predigt_refs_color[1]
+            log.info(f"Predigt2 (Farbe erkannt): {predigt_refs_color[1]}")
+        elif _looks_like_single_bible_ref(cell("predigt2_referenz")):
+            data.predigt2_reference = cell("predigt2_referenz")
             log.warning("Predigt2: Farb-Erkennung fehlgeschlagen, nutze feste Zeile")
 
     # Predigt-Titel und -Referenz dynamisch über Spalte B suchen
@@ -503,96 +705,65 @@ def read_godi_plan_by_sheet(sheet_name: str, excel_path: str) -> GodiPlanData | 
         col_b_lower = col_b.strip().lower()
 
         if "predigt 1" in col_b_lower or "predigt1" in col_b_lower:
-            ref = ws.cell(row=row, column=4).value
-            title = ws.cell(row=row, column=5).value
+            ref = _strip_placeholder(ws.cell(row=row, column=4).value)
+            title = _strip_placeholder(ws.cell(row=row, column=5).value)
             if ref:
-                data.predigt1_reference = str(ref).strip()
+                data.predigt1_reference = ref
             if title:
-                data.predigt1_title = str(title).strip()
+                data.predigt1_title = title
             predigt1_found = True
             log.info(f"Predigt1 (Spalte B Zeile {row}): ref=\"{data.predigt1_reference}\" titel=\"{data.predigt1_title}\"")
 
-        elif "predigt 2" in col_b_lower or "predigt2" in col_b_lower:
-            ref = ws.cell(row=row, column=4).value
-            title = ws.cell(row=row, column=5).value
-            if ref:
-                data.predigt2_reference = str(ref).strip()
+        elif compact and col_b_lower.startswith("predigt") and not predigt1_found:
+            # Sa-Layout: Zeile "Predigt" trägt in Spalte C den Titel
+            title = _text(ws.cell(row=row, column=col).value)
             if title:
-                data.predigt2_title = str(title).strip()
+                data.predigt1_title = title
+            predigt1_found = True
+            log.info(f"Predigt (Sa-Layout, Zeile {row}): titel=\"{data.predigt1_title}\"")
+
+        elif "predigt 2" in col_b_lower or "predigt2" in col_b_lower:
+            ref = _strip_placeholder(ws.cell(row=row, column=4).value)
+            title = _strip_placeholder(ws.cell(row=row, column=5).value)
+            if ref:
+                data.predigt2_reference = ref
+            if title:
+                data.predigt2_title = title
             predigt2_found = True
             log.info(f"Predigt2 (Spalte B Zeile {row}): ref=\"{data.predigt2_reference}\" titel=\"{data.predigt2_title}\"")
 
-    if not predigt1_found:
-        # Fallback auf feste Zeile
-        if not data.predigt1_title:
+    if not compact:
+        # Fallback auf feste Zeilen (nur Sonntags-Layout)
+        if not predigt1_found and not data.predigt1_title:
             data.predigt1_title = cell("predigt1_titel")
-    if not predigt2_found:
-        if not data.predigt2_title:
+        if not predigt2_found and not data.predigt2_title:
             data.predigt2_title = cell("predigt2_titel")
 
-    # Abendmahl-Erkennung
-    abendmahl_val = cell("abendmahl")
-    data.is_abendmahl = "abendmahl" in abendmahl_val.lower() if abendmahl_val else False
+    # Abendmahl-Erkennung: Beschriftung "Abendmahl" vor den Abkündigungen (Q4: Spalte B
+    # statt "Predigt 2", oder als Verkündigungs-Teil in Spalte F) bzw. Thema.
+    data.is_abendmahl = data.theme.lower().startswith("abendmahl") or any(
+        _text(ws.cell(row=r, column=c).value).lower().startswith("abendmahl")
+        for r in range(2, body_end) for c in range(2, 7))
 
     # === Lieder: Farb-Scan ===
-    if len(song_raws) >= 2:
+    if len(song_raws) >= 2 or compact:
         log.info(f"Farb-Scan: {len(song_raws)} Lieder gefunden")
         data.songs = _assign_songs_to_slots(song_raws)
     else:
-        # Fallback: feste Zeilen-Mappings
+        # Fallback: feste Zeilen-Mappings – nur Zellen übernehmen, die wie ein Lied aussehen
         log.warning(f"Farb-Scan lieferte nur {len(song_raws)} Lieder – "
                     f"Fallback auf feste Zeilen-Mappings")
         song_keys = ["song1", "song2", "song3", "song4", "song5", "song6", "song7"]
         for key in song_keys:
             raw = cell(key)
-            song = parse_song_entry(raw, key)
+            song = parse_song_entry(raw if _looks_like_song(raw) else "", key)
             data.songs.append(song)
 
-    # Abkündigungen
-    for row_num in ABKUENDIGUNGEN_ROWS:
-        parts = []
-        for col in range(2, 6):  # Cols B-E
-            val = ws.cell(row=row_num, column=col).value
-            if val:
-                parts.append(str(val).strip())
-        if parts:
-            data.announcements.append(" | ".join(parts))
-
-    # Einladungs-Events (Herzliche Einladung Folie)
-    for row_num in range(EINLADUNG_ROW_START, EINLADUNG_ROW_END + 1):
-        datum_val = ws.cell(row=row_num, column=EINLADUNG_COLS["datum"]).value
-        if not datum_val:
-            continue
-        zeit_val = ws.cell(row=row_num, column=EINLADUNG_COLS["uhrzeit"]).value
-        event_val = ws.cell(row=row_num, column=EINLADUNG_COLS["veranstaltung"]).value
-        hinweis_val = ws.cell(row=row_num, column=EINLADUNG_COLS["hinweis"]).value
-
-        # Datum: String beibehalten ("Di 17.03.26")
-        datum_str = str(datum_val).strip() if datum_val else ""
-
-        # Uhrzeit: datetime.time → "HH:MM"
-        if hasattr(zeit_val, 'strftime'):
-            zeit_str = zeit_val.strftime("%H:%M")
-        elif zeit_val:
-            zeit_str = str(zeit_val).strip()
-            # "19:00:00" → "19:00"
-            if zeit_str.count(":") == 2:
-                zeit_str = zeit_str[:5]
-        else:
-            zeit_str = ""
-
-        event_str = str(event_val).strip() if event_val else ""
-        hinweis_str = str(hinweis_val).strip() if hinweis_val else ""
-
-        if datum_str and event_str:
-            data.invitation_events.append(InvitationEvent(
-                date_str=datum_str,
-                time_str=zeit_str,
-                event_name=event_str,
-                note=hinweis_str,
-            ))
-            log.debug(f"Einladung: {datum_str} {zeit_str} {event_str}"
-                      f"{' (' + hinweis_str + ')' if hinweis_str else ''}")
+    # Abkündigungen + Einladungs-Events (Herzliche Einladung Folie)
+    if anchor:
+        data.announcements, data.invitation_events = _read_announcement_block(ws, anchor)
+    else:
+        _read_fixed_announcements(ws, data)
 
     log.info(f"Einladungs-Events: {len(data.invitation_events)} gefunden")
 

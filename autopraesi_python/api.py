@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 from dataclasses import asdict
 from typing import Optional
 from urllib.parse import quote
@@ -67,20 +68,28 @@ def _get_song_index():
 
 
 def _find_image(date_str: str) -> Optional[str]:
-    """Sucht das Hintergrundbild ('Bild 22.03.jpg' oder '22.3.jpg')."""
+    """Sucht das Hintergrundbild zum Datum in /Gemeinde.
+
+    Akzeptiert die Varianten, die in der Praxis vorkommen: 'Bild 22.03.jpg' (Bilder-Reiter),
+    '22.3.jpg', '11.10..png' – also optionales "Bild ", ein- oder zweistellige Tag/Monat,
+    ein oder zwei Punkte vor der Endung und .jpg/.jpeg/.png. Gibt es mehrere, gewinnt
+    das zuletzt geänderte (= das zuletzt ausgesuchte Bild).
+    """
     if not date_str:
         return None
     parts = date_str.split(".")
-    if len(parts) < 3:
+    if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
         return None
-    day, month = parts[0], parts[1]
-    day_short = str(int(day))
-    month_short = str(int(month))
-    for name in [f"Bild {day}.{month}.jpg", f"{day_short}.{month_short}.jpg"]:
-        path = f"{IMAGE_DIR}/{name}"
-        if storage.file_exists(path):
-            return path
-    return None
+    day, month = int(parts[0]), int(parts[1])
+    pattern = re.compile(rf"^(?:bild\s*)?0?{day}\.0?{month}\.*\.(?:jpe?g|png)$", re.IGNORECASE)
+    from datetime import datetime
+    from dropbox.files import FileMetadata
+    matches = [e for e in storage.list_folder(IMAGE_DIR)
+               if isinstance(e, FileMetadata) and pattern.match(e.name)]
+    if not matches:
+        return None
+    newest = max(matches, key=lambda e: getattr(e, "server_modified", None) or datetime.min)
+    return newest.path_display
 
 
 # --- Models ---
@@ -206,6 +215,7 @@ def get_sheet_data(sheet_name: str, excel_path: str):
         "songs": [s.model_dump() for s in songs],
         "announcements": data.announcements,
         "invitation_events": [asdict(e) for e in data.invitation_events],
+        "layout": data.layout,
         "image_found": image_path is not None,
         "image_path": image_path,
     }

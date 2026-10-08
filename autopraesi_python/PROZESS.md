@@ -79,7 +79,32 @@ Damit immer die aktuelle Version der Excel-Datei verwendet wird:
 - Öffnet jede gefundene Datei und prüft ob das Sheet `So {Tag}.{Monat}` existiert (z.B. "So 8.3")
 
 ### Daten auslesen (aus dem passenden Sheet)
-| Daten | Zeile | Spalte |
+
+**Seit Q4/2026 (8.10.2026) über Beschriftungen statt fester Zeilen**, weil sich die Zeilen
+zwischen den Quartalen verschieben:
+- **Layout:** Sonntags-Sheets haben die Inhalte in Spalte D, die schmaleren **Samstags-Sheets
+  in Spalte C** (erkannt an Thema/GoDi-Leitung bzw. "Predigttext:"). Die API meldet
+  `layout: "sonntag" | "samstag"`.
+- **Thema / Lesung / Predigttext (Sa):** Zeile über Spalte-A-Beschriftung ("Thema:",
+  "Lesungstext …", "Predigttext:").
+- **Begrüßungsvers:** Inhalt der Zeile "Begrüßung" (Spalte B), sonst erstes Zitat ("…") vor
+  den Abkündigungen. (Vorher fest Zeile 16 → in Q4 kam der "Liedbeitrag" als Vers.)
+- **Lieder:** grüne Zelle (inkl. Sa-Grün `99CC00`) ODER Spalte B = Gemeindelied/
+  Lobpreisstrophe/Kinderlied – jeweils nur, wenn der Text wie ein Lied aussieht.
+  "Liedbeitrag" zählt nicht.
+- **Abendmahl:** Zelle, die mit "Abendmahl" beginnt, vor den Abkündigungen (Q4: Spalte B
+  Zeile 33 statt "Predigt 2", oder Spalte F bei Verkündigung).
+- **Abkündigungen/Einladung:** ab der Zeile "Abkündigungen" bis "Ausblick"/"Danke an"/
+  Schlusslied; Datumsspalte je Zeile erkannt (So: B, Sa: C), daneben Uhrzeit, Veranstaltung,
+  (So) Hinweis in F. Termin ohne Datum (zweiter am selben Tag) übernimmt das Datum davor.
+- **Header ohne Jahr** ("Gottesdienst am Samstag 03.10.") → Jahr aus dem Dateinamen.
+- Die festen Zeilen unten gelten nur noch als (validierter) Fallback im Sonntags-Layout.
+
+Im Präsentations-Reiter werden Abschnitte ohne Inhalt in der Excel (leere Lied-Slots,
+keine Predigt 2/Lesung/Begrüßungsvers, Kinderstunde am Samstag) automatisch abgewählt –
+sonst blieb z.B. die Platzhalter-Folie "Lied5" in der Präsentation.
+
+| Daten (Fallback) | Zeile | Spalte |
 |-------|-------|--------|
 | Header ("Gottesdienst am...") | 1 | A |
 | Thema | 3 | D |
@@ -182,7 +207,9 @@ Text angezeigt wird, wenn der Treffer nicht eindeutig ist:
 cd autopraesi_python && venv/bin/python -m unittest -v
 ```
 `tests/test_song_finder.py` sichert die Suchlogik gegen einen synthetischen Index ab,
-`tests/test_text_fit.py` die Schriftanpassung gegen das Template.
+`tests/test_text_fit.py` die Schriftanpassung gegen das Template,
+`tests/test_excel_reader.py` das Einlesen (Q4-Sonntag, Samstags-Layout, Abendmahl) gegen
+im Speicher nachgebaute Arbeitsmappen.
 
 ---
 
@@ -190,8 +217,12 @@ cd autopraesi_python && venv/bin/python -m unittest -v
 
 **Datei:** `main.py` → `_find_image()`
 
-- Sucht in `~/Dropbox/Gemeinde/` nach `Bild DD.MM..jpg`
-- z.B. für 08.03.2026 → `Bild 08.03..jpg`
+- Sucht in `/Gemeinde/` (api.py `_find_image`) tolerant: optional "Bild ", Tag/Monat ein-
+  oder zweistellig, ein oder zwei Punkte, `.jpg/.jpeg/.png` – z.B. `Bild 08.03.jpg`,
+  `8.3.jpg`, `11.10..png`. Mehrere Treffer → das zuletzt geänderte gewinnt.
+- Beim Einsetzen wird das Bild als JPEG ins Folienformat 4:3 gebracht
+  (`_fit_image_to_slide`): nahe 4:3 → mittig zugeschnitten; Hochformat o.ä. → vollständig
+  auf unscharfem Hintergrund aus demselben Bild (nicht mehr verzerrt).
 - Optional – wenn nicht vorhanden, wird das Template-Bild beibehalten
 
 ---
@@ -223,6 +254,10 @@ Für jede Position wird entschieden:
 - Folien werden gemäß Plan neu aufgebaut:
   - Template-Folien: Shapes, Hintergründe und Bilder werden 1:1 kopiert
   - Lied-Folien: Aus den Song-PPTX-Dateien eingefügt, mit eigenem Song-Master
+  - Seitenzahl ("1 / 3") und Quellenangabe ("Text: …") werden auf die Foliennummer- bzw.
+    Fußzeilen-Platzhalter des Templates umgehängt, auch wenn die Lied-Datei sie auf anderen
+    Platzhaltern hat (z.B. "Sonstige Lieder/Gottes guter Segen" – sonst überlagerte die
+    Quellenangabe den Liedtext).
 
 ### Phase 7c: Hintergrundbild einsetzen
 - Sucht das Template-Platzhalter-Bild auf allen Folien

@@ -65,6 +65,8 @@ export interface SheetData {
   songs: SongStatus[];
   announcements: string[];
   invitation_events: InvitationEvent[];
+  // "samstag" = schmales Samstags-Sheet (ohne Kinderstunde); ältere Backends liefern es nicht
+  layout?: "sonntag" | "samstag";
   image_found: boolean;
   image_path: string | null;
 }

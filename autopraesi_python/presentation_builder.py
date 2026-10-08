@@ -1,5 +1,6 @@
 """Baut die Gottesdienst-Präsentation zusammen."""
 
+import io
 import logging
 import os
 import tempfile
@@ -209,6 +210,55 @@ def _iter_theme_image_shapes(prs):
             yield slide, shape
 
 
+def _fit_image_to_slide(blob: bytes, aspect: float) -> bytes:
+    """Bringt ein beliebiges Bild (JPEG/PNG, quer oder hoch) ins Folienformat als JPEG.
+
+    Das Template-Bild ist ein JPEG und wird vollflächig (4:3) gestreckt. Ohne Anpassung
+    würden PNGs mit falschem Inhaltstyp eingebettet und Hochformat-Bilder verzerrt.
+    - Seitenverhältnis nahe 4:3 (±20 %): mittig auf 4:3 zuschneiden.
+    - Stark abweichend (z.B. Hochformat): Bild vollständig zeigen, mittig auf einer
+      unscharfen, vergrößerten Version seiner selbst (kein Verzerren, nichts abgeschnitten).
+    Bei Fehlern wird das Original unverändert zurückgegeben.
+    """
+    try:
+        from PIL import Image, ImageFilter
+        img = Image.open(io.BytesIO(blob))
+        img.load()
+        if img.mode in ("RGBA", "LA", "P"):
+            img = img.convert("RGBA")
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        else:
+            img = img.convert("RGB")
+        w, h = img.size
+        ratio = (w / h) / aspect
+        if 0.8 <= ratio <= 1.25:
+            if ratio > 1:   # zu breit → links/rechts abschneiden
+                nw = round(h * aspect)
+                img = img.crop(((w - nw) // 2, 0, (w - nw) // 2 + nw, h))
+            elif ratio < 1:  # zu hoch → oben/unten abschneiden
+                nh = round(w / aspect)
+                img = img.crop((0, (h - nh) // 2, w, (h - nh) // 2 + nh))
+        else:
+            cw, ch = (max(w, round(h * aspect)), max(h, round(w / aspect)))
+            scale = max(cw / w, ch / h)
+            back = img.resize((round(w * scale), round(h * scale)))
+            back = back.crop(((back.width - cw) // 2, (back.height - ch) // 2,
+                              (back.width - cw) // 2 + cw, (back.height - ch) // 2 + ch))
+            back = back.filter(ImageFilter.GaussianBlur(radius=max(cw, ch) / 40))
+            back.paste(img, ((cw - w) // 2, (ch - h) // 2))
+            img = back
+        if img.width > 2048:
+            img = img.resize((2048, round(2048 / img.width * img.height)), Image.LANCZOS)
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90)
+        return out.getvalue()
+    except Exception as e:
+        log.warning(f"Bild konnte nicht ins Folienformat gebracht werden ({e}) – nutze Original")
+        return blob
+
+
 def _set_theme_image(prs, image_path: str):
     """Ersetzt das Template-Hintergrundbild auf allen Thema-Folien.
 
@@ -217,7 +267,7 @@ def _set_theme_image(prs, image_path: str):
     Dateigröße. Song-Logos und andere Bilder bleiben unangetastet.
     """
     with open(image_path, 'rb') as f:
-        new_blob = f.read()
+        new_blob = _fit_image_to_slide(f.read(), prs.slide_width / prs.slide_height)
 
     replaced_parts = set()
     count = 0
