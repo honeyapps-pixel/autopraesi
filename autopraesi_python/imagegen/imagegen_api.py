@@ -15,10 +15,12 @@ Start:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
 import time
+import urllib.request
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -49,6 +51,25 @@ QUANTIZE: Optional[int] = None if _q.lower() in ("", "none", "0") else int(_q)
 
 # Kandidaten älter als N Stunden beim Start aufräumen.
 MAX_AGE_HOURS = int(os.environ.get("IMG_MAX_AGE_HOURS", "48"))
+
+# --- KI-Szenenfindung (LOKAL via Ollama) --------------------------------------
+# Thema + Wochenspruch werden von einem LOKALEN Sprachmodell (Ollama, läuft auf dem
+# Mac Mini – KEIN API-Key, keine Cloud) in konkrete, text-freie Bildmotive übersetzt.
+# Damit gehen die Bilder WIRKLICH auf Thema/Wochenspruch ein, sind untereinander
+# deutlich verschieden und kommen bei jeder Generierung neu heraus.
+# Fällt Ollama aus (Dienst nicht erreichbar, Modell fehlt), greift still die feste
+# ``VARIATIONS``-Liste unten – der Dienst läuft normal weiter.
+OLLAMA_URL = os.environ.get("IMG_OLLAMA_URL", "http://localhost:11434").rstrip("/")
+SCENE_MODEL = os.environ.get("IMG_SCENE_MODEL", "qwen2.5:32b")
+# Sprachmodell nach der Szenenfindung SOFORT entladen ("0"): qwen2.5:32b belegt ~20 GB und
+# würde sonst neben dem Bildmodell im Speicher bleiben → der Mac swappt und die Bild-
+# generierung bleibt minutenlang hängen. Neu laden kostet nur ~10–20 s pro Generierung.
+SCENE_KEEP_ALIVE = os.environ.get("IMG_SCENE_KEEP_ALIVE", "0")
+SCENE_TIMEOUT = int(os.environ.get("IMG_SCENE_TIMEOUT", "90"))    # s; kalt lädt Modell erst
+# Gedächtnis gegen Wiederholung: zuletzt benutzte Motive, die das Modell meiden soll.
+HISTORY_FILE = WORK_DIR / "recent_scenes.json"
+HISTORY_KEEP = 30          # so viele jüngste Motive aufheben
+HISTORY_AVOID = 24         # so viele davon dem Modell als „nicht wiederholen" mitgeben
 
 # --- Prompt-Stil: christliches Gottesdienst-Hintergrundbild --------------------
 # Fester Sakral-Stil, damit der Nutzer kein Prompt-Wissen braucht. Bewusst
@@ -86,10 +107,10 @@ NEGATIVE = (
 )
 
 
-# Bildvarianten: bei 2–3 Bildern bekommt jedes eine ANDERE Variante (Motiv/Licht/
-# Komposition), damit nicht 3× fast dasselbe entsteht. Auf eure Hintergrundbilder
-# abgestimmt (ruhige Natur + dezente christliche Symbolik). Wird mit dem Freitext
-# kombiniert; der Freitext steht zuerst (höchstes Gewicht).
+# FALLBACK-Bildvarianten (nur ohne KI-Szenenfindung): feste Motive, die rotieren,
+# damit bei 2–3 Bildern nicht 3× fast dasselbe entsteht. Auf eure Hintergrundbilder
+# abgestimmt (ruhige Natur + dezente christliche Symbolik). Gehen NICHT aufs Thema ein –
+# der reguläre Weg ist die KI-Szenenfindung weiter unten.
 VARIATIONS = [
     "an open golden field under a vast sunrise sky, soft warm light",
     "a misty forest with sunbeams streaming through the trees",
@@ -105,14 +126,13 @@ VARIATIONS = [
 
 
 def _build_prompt(theme: str, wochenspruch: str, freitext: str, variation: str = "") -> str:
-    """Baut den Bildprompt – reine SZENEN-Beschreibung aus Freitext (+ Variante) + Stil.
+    """Baut den finalen Bildprompt: reine SZENEN-Beschreibung (+ optional Freitext) + Stil.
 
-    Thema und Wochenspruch werden BEWUSST NICHT in den Bildprompt übernommen: kurze, slogan-
-    artige Phrasen (z.B. ein Thema) malt das Modell sonst manchmal als Titel ins Bild. Sie
-    dienen im Formular nur als Inspiration für den Freitext. Der eigentliche Text (Titel,
-    Datum, Vers) liegt später als Overlay auf der Folie – nicht im generierten Bild.
-
-    ``variation`` sorgt bei Mehrfach-Generierung für deutlich unterschiedliche Bilder.
+    ``variation`` ist das eigentliche Motiv – entweder eine KI-Szene (aus Thema/Wochenspruch
+    abgeleitet, s. ``_derive_scenes``) oder ein festes Fallback-Motiv. Thema und Wochenspruch
+    selbst stehen hier NICHT als Klartext im Prompt: kurze Slogans malt das Modell sonst als
+    Titel ins Bild; ihr Sinn fließt stattdessen über die KI-Szene ein. Der eigentliche Text
+    (Titel, Datum, Vers) liegt später als Overlay auf der Folie – nicht im generierten Bild.
     """
     parts: list[str] = []
     if freitext and freitext.strip():
@@ -123,6 +143,148 @@ def _build_prompt(theme: str, wochenspruch: str, freitext: str, variation: str =
     # Bewusst KEIN "no text" im Positiv-Prompt – Negationen werden dort schlecht verstanden
     # und führen eher zu Schrift. Textausschluss passiert über NEGATIVE.
     return ". ".join(parts)
+
+
+# --- KI-Szenenfindung ----------------------------------------------------------
+# Wandelt Thema + Wochenspruch (+ Freitext) in konkrete, text-freie Bildmotive um –
+# symbolisch passend, untereinander verschieden, und mit einem Gedächtnis, das schon
+# benutzte Motive meidet (gegen „war letzte Woche schon"). Läuft lokal über Ollama.
+_history_lock = threading.Lock()
+
+SCENE_SYSTEM = (
+    "You are an art director choosing the photographic background image for the slides of a "
+    "German Protestant church service (Gottesdienst). You are given the sermon theme (Thema) and "
+    "the weekly Bible verse (Wochenspruch) in German, plus an optional free-text idea. Invent "
+    "vivid background MOTIFS for a text-to-image model.\n\n"
+    "Rules:\n"
+    "- Output ENGLISH descriptions only.\n"
+    "- Each motif is ONE concise phrase of roughly 12-28 words: subject, setting, light and mood "
+    "as comma-separated visual descriptors (no full sentences about people doing things).\n"
+    "- Connect to the MEANING and imagery of the theme and verse symbolically and atmospherically; "
+    "evoke the feeling, never illustrate the literal words.\n"
+    "- Absolutely NO text, letters, words, captions, signage or writing anywhere in the image.\n"
+    "- No close-up human faces and no depiction of Jesus or identifiable holy figures (AI faces "
+    "look wrong); people only as distant silhouettes, seen from behind, or just hands.\n"
+    "- Photographic, wallpaper-like, reverent, hopeful, with warm natural or divine light, and a "
+    "calm composition that leaves empty negative space so a title can be overlaid.\n"
+    "- Stay in the congregation's house style: quiet nature (fields, forests, water, skies, "
+    "sunrises and sunsets) and gentle Christian symbolism (a distant cross silhouette, an open "
+    "Bible, candlelight, bread and a cup for Holy Communion, a single lit candle).\n"
+    "- Make the requested motifs clearly DIFFERENT from one another in subject, palette, time of "
+    "day and composition, and different from any 'recently used' motifs provided.\n\n"
+    'Respond with ONLY a JSON object of the form {"scenes": ["motif one", "motif two"]} — '
+    "no markdown code fences and no text outside the JSON."
+)
+
+
+def _ollama_post(path: str, payload: dict, timeout: int) -> dict:
+    """POST an die lokale Ollama-API; gibt das JSON zurück (wirft bei Fehler)."""
+    req = urllib.request.Request(
+        f"{OLLAMA_URL}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _scene_ai_ready() -> bool:
+    """True, wenn die lokale Ollama-API erreichbar ist (für /health). Kurzer Probe-Call."""
+    try:
+        with urllib.request.urlopen(f"{OLLAMA_URL}/api/tags", timeout=3) as r:
+            return r.status == 200
+    except Exception:  # noqa: BLE001 – Ollama aus -> Fallback-Motive
+        return False
+
+
+def _load_recent() -> list[str]:
+    with _history_lock:
+        try:
+            data = json.loads(HISTORY_FILE.read_text("utf-8"))
+            return [s for s in data if isinstance(s, str)][-HISTORY_AVOID:]
+        except Exception:  # noqa: BLE001 – fehlende/kaputte Datei = leere Historie
+            return []
+
+
+def _remember(scenes: list[str]) -> None:
+    clean = [s.strip() for s in scenes if s and s.strip()]
+    if not clean:
+        return
+    with _history_lock:
+        try:
+            old = [s for s in json.loads(HISTORY_FILE.read_text("utf-8")) if isinstance(s, str)]
+        except Exception:  # noqa: BLE001
+            old = []
+        merged = (old + clean)[-HISTORY_KEEP:]
+        try:
+            HISTORY_FILE.write_text(json.dumps(merged, ensure_ascii=False), "utf-8")
+        except OSError as e:
+            log.warning("Szenen-Historie nicht speicherbar: %s", e)
+
+
+def _parse_scenes(text: str) -> list[str]:
+    """Tolerant JSON aus der Modellantwort lesen (auch wenn ```-Fences o.ä. drumherum sind)."""
+    import re
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t).rstrip("`").strip()
+    try:
+        obj = json.loads(t)
+    except Exception:  # noqa: BLE001 – erstes {...} herausgreifen
+        m = re.search(r"\{.*\}", t, re.S)
+        if not m:
+            return []
+        try:
+            obj = json.loads(m.group(0))
+        except Exception:  # noqa: BLE001
+            return []
+    scenes = obj.get("scenes") if isinstance(obj, dict) else obj
+    if not isinstance(scenes, list):
+        return []
+    return [s.strip() for s in scenes if isinstance(s, str) and s.strip()]
+
+
+def _derive_scenes(theme: str, wochenspruch: str, freitext: str,
+                   count: int, avoid: list[str]) -> Optional[list[str]]:
+    """Übersetzt Thema+Wochenspruch(+Freitext) in ``count`` text-freie Bildmotive.
+
+    Gibt None zurück, wenn das lokale Modell (Ollama) nicht erreichbar ist oder der
+    Aufruf scheitert – die Aufrufer fallen dann auf die festen ``VARIATIONS`` zurück.
+    """
+    user = (
+        f"Thema: {theme.strip() or '(keins)'}\n"
+        f"Wochenspruch: {wochenspruch.strip() or '(keiner)'}\n"
+        f"Freitext-Bildidee: {freitext.strip() or '(keine)'}\n\n"
+        f"Gib genau {count} deutlich unterschiedliche Motive zurück."
+    )
+    if avoid:
+        user += "\n\nRecently used (avoid resembling these):\n- " + "\n- ".join(avoid)
+    try:
+        # format="json" zwingt Ollama zu sauberem JSON.
+        resp = _ollama_post("/api/chat", {
+            "model": SCENE_MODEL,
+            "stream": False,
+            "format": "json",
+            "keep_alive": SCENE_KEEP_ALIVE,  # "0" = nach der Antwort entladen
+            "options": {"temperature": 1.0},  # hoch = mehr Abwechslung über Generierungen
+            "messages": [
+                {"role": "system", "content": SCENE_SYSTEM},
+                {"role": "user", "content": user},
+            ],
+        }, timeout=SCENE_TIMEOUT)
+        scenes = _parse_scenes(resp.get("message", {}).get("content", ""))
+    except Exception as e:  # noqa: BLE001 – jeder Fehler (Ollama aus/Timeout) -> Fallback
+        log.warning("KI-Szenenfindung (Ollama) fehlgeschlagen (%s) – nutze feste Varianten.", e)
+        return None
+    if not scenes:
+        return None
+    # Genau ``count`` zurückgeben (zyklisch auffüllen, falls das Modell zu wenige lieferte).
+    if len(scenes) < count:
+        base = list(scenes)
+        while len(scenes) < count:
+            scenes.append(base[len(scenes) % len(base)])
+    return scenes[:count]
 
 
 def _cleanup_old() -> None:
@@ -205,11 +367,11 @@ threading.Thread(target=_worker, daemon=True, name="imagegen-worker").start()
 
 def _enqueue(theme: str, wochenspruch: str, freitext: str, count: int,
              seed: Optional[int]) -> list[dict]:
-    """Legt ``count`` Jobs an – jeder mit eigener Bildvariante – und gibt [{id, seed}] zurück.
+    """Legt ``count`` Jobs an – jeder mit eigenem, themenbezogenem Motiv – und gibt [{id, seed}].
 
-    Jedes Bild bekommt eine ANDERE Variante aus ``VARIATIONS`` (rotierend, zeitversetzt),
-    damit 2–3 Bilder deutlich verschieden ausfallen statt fast identisch. Auch wiederholtes
-    Generieren rotiert (Zeitbasis), sodass nicht immer dieselben Varianten kommen.
+    Bevorzugt KI-Motive (passend zu Thema/Wochenspruch, immer neu, untereinander deutlich
+    verschieden, mit Gedächtnis gegen Wiederholung). Ohne KI: rotierende feste ``VARIATIONS``
+    (alter Weg). Jedes Bild bekommt zusätzlich einen eigenen Seed.
     """
     if seed is not None:
         seeds = [seed + i * 9973 for i in range(count)]
@@ -217,16 +379,26 @@ def _enqueue(theme: str, wochenspruch: str, freitext: str, count: int,
         base = int(time.time() * 1000) % 1_000_000
         seeds = [base + i * 7919 for i in range(count)]
 
-    offset = int(time.time())  # rotiert die Varianten über Generierungen hinweg
+    scenes = _derive_scenes(theme, wochenspruch, freitext, count, _load_recent())
+    ki = scenes is not None
+    if not ki:
+        # Fallback: feste Varianten rotieren (zeitbasiert, damit nicht immer dieselben).
+        offset = int(time.time())
+        scenes = [VARIATIONS[(offset + i) % len(VARIATIONS)] for i in range(count)]
+
     out: list[dict] = []
     for i, s in enumerate(seeds):
-        variation = VARIATIONS[(offset + i) % len(VARIATIONS)]
-        prompt = _build_prompt(theme, wochenspruch, freitext, variation)
+        scene = scenes[i] if i < len(scenes) else scenes[i % len(scenes)]
+        # KI-Motiv enthält den Freitext schon; im Fallback Freitext separat voranstellen.
+        prompt = _build_prompt(theme, wochenspruch, "" if ki else freitext, scene)
         job_id = uuid.uuid4().hex
         with _jobs_lock:
             _jobs[job_id] = {"status": "pending", "seed": s, "error": None, "prompt": prompt}
         _job_queue.put(job_id)
         out.append({"id": job_id, "seed": s})
+
+    if ki:
+        _remember(scenes)  # schon benutzte Motive merken -> nächste Generierung meidet sie
     return out
 
 
@@ -279,7 +451,8 @@ def health():
     with _jobs_lock:
         pending = sum(1 for j in _jobs.values() if j["status"] == "pending")
     return {"ok": True, "model": "z-image-turbo", "loaded": _model is not None,
-            "size": f"{WIDTH}x{HEIGHT}", "steps": STEPS, "pending": pending}
+            "size": f"{WIDTH}x{HEIGHT}", "steps": STEPS, "pending": pending,
+            "scene_ai": _scene_ai_ready(), "scene_model": SCENE_MODEL}
 
 
 @app.post("/generate")

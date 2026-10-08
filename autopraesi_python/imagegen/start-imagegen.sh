@@ -8,6 +8,9 @@
 # hier dieselbe Domain genutzt wird, "funktioniert es einfach" nach jedem Neustart.
 # Voraussetzungen: ngrok mit Authtoken konfiguriert; fastapi+uvicorn im mflux-venv:
 #   ~/.mflux-venv/bin/pip install fastapi "uvicorn[standard]"
+# KI-Szenenfindung (Thema/Wochenspruch -> Bildmotiv) läuft LOKAL über Ollama – KEIN
+# API-Key, keine Cloud. Voraussetzung: Ollama läuft + Modell ist da:
+#   ollama serve   (meist als Dienst aktiv)   und   ollama pull qwen2.5:32b
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -18,6 +21,13 @@ UVICORN="$VENV/bin/uvicorn"
 
 [ -x "$UVICORN" ] || { echo "❌ uvicorn nicht im venv: $UVICORN  (pip install fastapi 'uvicorn[standard]')" >&2; exit 1; }
 command -v ngrok >/dev/null || { echo "❌ ngrok nicht gefunden (brew install ngrok)" >&2; exit 1; }
+
+# Hinweis (nicht fatal): KI-Szenenfindung braucht eine laufende Ollama-API auf dem Mac.
+if curl -s -m 2 "${IMG_OLLAMA_URL:-http://localhost:11434}/api/tags" >/dev/null 2>&1; then
+    echo "▶ Ollama erreichbar – KI-Szenenfindung aktiv."
+else
+    echo "ℹ️  Ollama nicht erreichbar – Bilder laufen mit festen Fallback-Motiven."
+fi
 
 # Altprozesse sauber beenden (verhindert Port-/ngrok-Sitzungskonflikte beim Neustart).
 pkill -f "uvicorn imagegen_api" 2>/dev/null || true
