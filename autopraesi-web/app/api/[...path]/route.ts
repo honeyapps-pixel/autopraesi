@@ -5,6 +5,18 @@ const BACKEND =
   process.env.NEXT_PUBLIC_API_URL ||
   "https://autopraesi-api.onrender.com";
 
+// Erstellen (PPTX bauen, Bibeltexte laden) kann länger dauern; Render-Free
+// braucht zudem bis zu ~60 s zum Aufwachen.
+export const maxDuration = 300;
+
+function backendError(e: unknown): NextResponse {
+  const msg = e instanceof Error ? e.message : String(e);
+  return NextResponse.json(
+    { detail: `Backend nicht erreichbar (${msg}). Ggf. schläft der Server – bitte in 1 Minute erneut versuchen.` },
+    { status: 502 }
+  );
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -12,8 +24,11 @@ export async function GET(
   const { path } = await params;
   const url = new URL(req.url);
   const target = `${BACKEND}/api/${path.join("/")}${url.search}`;
-  const res = await fetch(target);
-  return proxy(res);
+  try {
+    return await proxy(await fetch(target));
+  } catch (e) {
+    return backendError(e);
+  }
 }
 
 export async function POST(
@@ -25,14 +40,18 @@ export async function POST(
   const target = `${BACKEND}/api/${path.join("/")}${url.search}`;
   const contentType = req.headers.get("content-type") || "";
 
-  const res = await fetch(target, {
-    method: "POST",
-    headers: {
-      "Content-Type": contentType,
-    },
-    body: contentType.includes("json") ? await req.text() : await req.arrayBuffer(),
-  });
-  return proxy(res);
+  try {
+    const res = await fetch(target, {
+      method: "POST",
+      headers: {
+        "Content-Type": contentType,
+      },
+      body: contentType.includes("json") ? await req.text() : await req.arrayBuffer(),
+    });
+    return await proxy(res);
+  } catch (e) {
+    return backendError(e);
+  }
 }
 
 async function proxy(res: Response): Promise<NextResponse> {

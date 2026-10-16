@@ -132,7 +132,9 @@ export async function generate(req: {
 }): Promise<GenerateResult> {
   const res = await postJSON(`${API}/api/generate`, req);
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Unbekannter Fehler" }));
+    const err = await res.json().catch(() => ({
+      detail: `Server-Fehler ${res.status}${res.statusText ? " " + res.statusText : ""} (Backend evtl. aufgewacht/Zeitüberschreitung – bitte erneut versuchen)`,
+    }));
     throw new Error(err.detail || "Generierung fehlgeschlagen");
   }
   return res.json();
