@@ -223,7 +223,12 @@ def _fit_image_to_slide(blob: bytes, aspect: float) -> bytes:
     try:
         from PIL import Image, ImageFilter
         img = Image.open(io.BytesIO(blob))
+        # Ausgabe ist max. 2048 px breit: JPEG schon beim Dekodieren verkleinern und
+        # danach begrenzen. Sonst braucht ein 12-MP-Foto samt Unschärfe-Hintergrund
+        # mehrere hundert MB und reißt das 512-MB-Limit auf Render (OOM-Kill).
+        img.draft("RGB", (2048, 2048))
         img.load()
+        img.thumbnail((2048, 2048), Image.LANCZOS)
         if img.mode in ("RGBA", "LA", "P"):
             img = img.convert("RGBA")
             bg = Image.new("RGB", img.size, (255, 255, 255))
@@ -246,7 +251,10 @@ def _fit_image_to_slide(blob: bytes, aspect: float) -> bytes:
             back = img.resize((round(w * scale), round(h * scale)))
             back = back.crop(((back.width - cw) // 2, (back.height - ch) // 2,
                               (back.width - cw) // 2 + cw, (back.height - ch) // 2 + ch))
-            back = back.filter(ImageFilter.GaussianBlur(radius=max(cw, ch) / 40))
+            # Unschärfe auf kleiner Kopie rechnen (spart Speicher, Ergebnis ist ohnehin weich)
+            small = back.resize((max(1, cw // 4), max(1, ch // 4)))
+            small = small.filter(ImageFilter.GaussianBlur(radius=max(cw, ch) / 160))
+            back = small.resize((cw, ch), Image.BILINEAR)
             back.paste(img, ((cw - w) // 2, (ch - h) // 2))
             img = back
         if img.width > 2048:
