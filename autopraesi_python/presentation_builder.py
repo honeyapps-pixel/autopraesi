@@ -41,8 +41,42 @@ SONG_SLOTS = {
 }
 
 
+def _normalize_newlines(text: str) -> str:
+    """Vereinheitlicht Zeilenumbrüche aus dem Frontend (\r\n, \r, \v) zu \n."""
+    return (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\v", "\n")
+
+
+def _set_run_text_with_breaks(run, text: str):
+    """Setzt den Text eines Runs; \n wird zu einem Zeilenumbruch (<a:br>).
+
+    Jede weitere Zeile bekommt einen eigenen Run mit derselben Formatierung
+    (rPr wird kopiert), damit Schrift, Farbe und Größe erhalten bleiben.
+    """
+    lines = _normalize_newlines(text).split("\n")
+    run.text = lines[0]
+    if len(lines) == 1:
+        return
+    r = run._r
+    rPr = r.find(qn('a:rPr'))
+    anchor = r
+    for line in lines[1:]:
+        br = etree.Element(qn('a:br'))
+        if rPr is not None:
+            br.append(copy.deepcopy(rPr))
+        anchor.addnext(br)
+        new_r = copy.deepcopy(r)
+        for t in new_r.findall(qn('a:t')):
+            t.text = line
+        br.addnext(new_r)
+        anchor = new_r
+
+
 def _replace_text_in_shape(shape, old_text, new_text):
-    """Ersetzt Text in einem Shape, behält Formatierung bei."""
+    """Ersetzt Text in einem Shape, behält Formatierung bei.
+
+    Zeilenumbrüche (\n) im neuen Text werden als Zeilenumbruch in
+    PowerPoint übernommen.
+    """
     if not shape.has_text_frame:
         return False
     replaced = False
@@ -51,11 +85,49 @@ def _replace_text_in_shape(shape, old_text, new_text):
         if old_text in full_para_text:
             if len(para.runs) >= 1:
                 combined = full_para_text.replace(old_text, new_text)
-                para.runs[0].text = combined
-                for run in para.runs[1:]:
+                runs = list(para.runs)
+                for run in runs[1:]:
                     run.text = ""
+                _set_run_text_with_breaks(runs[0], combined)
                 replaced = True
     return replaced
+
+
+def _set_shape_lines(shape, text: str):
+    """Ersetzt den kompletten Text eines Shapes zeilenweise.
+
+    Jede Zeile wird ein eigener Absatz mit der Formatierung des ersten
+    Absatzes/Runs (so wie die Untertitel-Box im Template aufgebaut ist).
+    """
+    if not shape.has_text_frame:
+        return
+    txBody = shape.text_frame._txBody
+    paras = txBody.findall(qn('a:p'))
+    if not paras:
+        return
+    proto = copy.deepcopy(paras[0])
+    # Nur den ersten Run als Vorlage behalten, Umbrüche/Felder entfernen
+    first_run = proto.find(qn('a:r'))
+    for child in list(proto):
+        if child.tag in (qn('a:r'), qn('a:br'), qn('a:fld')) and child is not first_run:
+            proto.remove(child)
+    if first_run is None:
+        first_run = etree.SubElement(proto, qn('a:r'))
+        etree.SubElement(first_run, qn('a:t'))
+        end = proto.find(qn('a:endParaRPr'))
+        if end is not None:
+            proto.remove(end)
+            proto.append(end)
+    for p in paras:
+        txBody.remove(p)
+    for line in _normalize_newlines(text).split("\n"):
+        p = copy.deepcopy(proto)
+        r = p.find(qn('a:r'))
+        t = r.find(qn('a:t'))
+        if t is None:
+            t = etree.SubElement(r, qn('a:t'))
+        t.text = line
+        txBody.append(p)
 
 
 def _replace_text_in_slide(slide, old_text, new_text):
@@ -174,6 +246,11 @@ def build_presentation(data, song_paths: dict, image_path: str = None,
     # === Phase 4e: Text-Effekte (Schatten/Kontur) auf Thema-Folien ===
     if shadow_strength != "normal" or text_outline:
         _apply_text_effects(prs, shadow_strength, text_outline)
+
+    # === Phase 4f: Frei bearbeiteter Untertitel (zuletzt, s. Docstring) ===
+    subtitle = _normalize_newlines(getattr(data, "subtitle", "")).strip()
+    if subtitle:
+        _apply_subtitle_override(prs, subtitle)
 
     # === Phase 5: Speichern (lokal in Temp) ===
     prs.save(output_path)
@@ -1026,9 +1103,15 @@ def _fit_shape_to_slide(slide, shape, bottom_limit_emu: int = None,
 
 
 def _find_shape_with_text(slide, text: str):
-    """Erstes Shape der Folie, dessen Text den gegebenen Text enthält."""
+    """Erstes Shape der Folie, dessen Text den gegebenen Text enthält.
+
+    Zeilenumbrüche werden vereinheitlicht: python-pptx liefert <a:br> als \v.
+    """
+    text = _normalize_newlines(text)
+    if not text:
+        return None
     for shape in slide.shapes:
-        if shape.has_text_frame and text and text in shape.text_frame.text:
+        if shape.has_text_frame and text in _normalize_newlines(shape.text_frame.text):
             return shape
     return None
 
@@ -1219,6 +1302,43 @@ def _adjust_song_text_size(slide, min_sz=3200):
                     rPr.set('sz', min_str)
 
 
+def _finish_theme_slide(slide, data):
+    """Titel-Box einer Thema-Folie vergrößern (kein Overflow über den Rand).
+
+    Der Titel wird über den Shape-Namen oder die erste Zeile des Themas
+    erkannt (bei Zeilenumbrüchen liefert text_frame.text ein \v statt \n).
+    """
+    first_line = _normalize_newlines(data.theme).split("\n")[0].strip()
+    for shape in slide.shapes:
+        if not shape.has_text_frame:
+            continue
+        text = shape.text_frame.text
+        if shape.name == "Titel 1" or (first_line and first_line in text
+                                         and "Gottesdienst am" not in text):
+            _fix_title_overflow(shape)
+
+
+def _apply_subtitle_override(prs, subtitle: str):
+    """Setzt den im Frontend frei bearbeiteten Untertitel auf allen Thema-Folien.
+
+    Läuft als letzter Schritt, weil die übrigen Phasen Thema-Folien am Text
+    "Gottesdienst am" erkennen – der kann im bearbeiteten Text fehlen.
+    Farbe/Größe/Effekte bleiben erhalten, da der erste Run als Vorlage dient.
+    """
+    count = 0
+    for slide in prs.slides:
+        if "Gottesdienst am" not in _get_slide_text(slide):
+            continue
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            if shape.name == "CustomShape 1" or "Gottesdienst am" in shape.text_frame.text:
+                _set_shape_lines(shape, subtitle)
+                count += 1
+                break
+    log.info(f"Untertitel auf {count} Thema-Folien gesetzt")
+
+
 def _fill_slide_simple(slide, data, is_template=True):
     """Füllt einfache Text-Platzhalter (nicht Bibeltexte)."""
     slide_text = _get_slide_text(slide)
@@ -1233,10 +1353,7 @@ def _fill_slide_simple(slide, data, is_template=True):
                                f"Gottesdienst am {data.date_str},")
         _replace_text_in_slide(slide, "Letzter Sonntag des Kirchenjahres",
                                data.kirchenkalender)
-        # Titel-Box vergrößern damit kein Overflow über Folienrand
-        for shape in slide.shapes:
-            if shape.has_text_frame and data.theme in shape.text_frame.text:
-                _fix_title_overflow(shape)
+        _finish_theme_slide(slide, data)
 
     if "Begrüßungsvers" in slide_text and data.greeting_verse:
         _replace_text_in_slide(slide, "Begrüßungsvers", data.greeting_verse)
@@ -1250,10 +1367,7 @@ def _fill_slide_simple(slide, data, is_template=True):
         _replace_text_in_slide(slide, "Gottesdienst am XY.XY.XY",
                                f"Gottesdienst am {data.date_str},")
         _replace_text_in_slide(slide, "Name des Sonntags", data.kirchenkalender)
-        # Titel-Box vergrößern damit kein Overflow über Folienrand
-        for shape in slide.shapes:
-            if shape.has_text_frame and data.theme in shape.text_frame.text:
-                _fix_title_overflow(shape)
+        _finish_theme_slide(slide, data)
 
     if "Predigt zu Predigtext1" in slide_text:
         _replace_text_in_slide(slide, "Predigt zu Predigtext1",

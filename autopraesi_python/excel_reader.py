@@ -92,6 +92,7 @@ class GodiPlanData:
     announcements: list = field(default_factory=list)  # Abkündigungen
     invitation_events: list = field(default_factory=list)  # List[InvitationEvent]
     layout: str = "sonntag"         # "sonntag" (Inhalte in Spalte D) | "samstag" (Spalte C)
+    subtitle: str = ""              # Frei bearbeiteter Untertitel der Thema-Folie (leer = automatisch)
 
 
 def _norm_rgb6(fg) -> Optional[str]:
