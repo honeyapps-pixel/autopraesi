@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Backend-URL des Cloud-Dienstes (Render). Per Vercel-Env NEXT_PUBLIC_API_URL gesetzt.
+// Backend-URL des Cloud-Dienstes (Render). Per Vercel-Env NEXT_PUBLIC_API_URL
+// überschreibbar; Standard ist der Render-Dienst "autopraesi".
 const BACKEND =
   process.env.NEXT_PUBLIC_API_URL ||
-  "https://autopraesi-api.onrender.com";
+  "https://autopraesi.onrender.com";
 
 // Erstellen (PPTX bauen, Bibeltexte laden) kann länger dauern; Render-Free
 // braucht zudem bis zu ~60 s zum Aufwachen.
