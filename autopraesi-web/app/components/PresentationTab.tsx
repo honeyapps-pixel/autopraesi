@@ -45,22 +45,51 @@ interface TextLayout {
 
 // --- Draggable Slide Text Element ---
 function DraggableText({
-  text, layout, color, italic, onLayoutChange, containerRef,
+  text, placeholder, layout, color, italic, onLayoutChange, onTextChange, containerRef,
   textBanner, shadowStrength, textOutline,
 }: {
   text: string;
+  placeholder?: string;
   layout: TextLayout;
   color: string;
   italic?: boolean;
   onLayoutChange: (l: TextLayout) => void;
+  onTextChange?: (t: string) => void;
   containerRef: React.RefObject<HTMLDivElement | null>;
   textBanner?: string;
   shadowStrength?: string;
   textOutline?: boolean;
 }) {
   const dragStart = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const [editing, setEditing] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Beim Start der Bearbeitung: Fokus + Cursor ans Ende
+  useEffect(() => {
+    if (!editing || !textareaRef.current) return;
+    const ta = textareaRef.current;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }, [editing]);
+
+  // Textfeld wächst mit (auch bei automatisch umbrochenen Zeilen)
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!editing || !ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  }, [editing, text, layout.fontSize, layout.w]);
+
+  const startEditing = (e?: React.SyntheticEvent) => {
+    if (!onTextChange || editing) return;
+    e?.preventDefault();
+    e?.stopPropagation();
+    dragStart.current = null;
+    setEditing(true);
+  };
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    if (editing) return; // im Textfeld normal klicken/markieren
     e.preventDefault();
     e.stopPropagation();
     const el = e.currentTarget as HTMLElement;
@@ -94,20 +123,30 @@ function DraggableText({
   const bannerOpacity = textBanner === "subtle" ? 0.2 : textBanner === "medium" ? 0.4 : textBanner === "strong" ? 0.6 : 0;
   const outlineColor = color === "white" ? "black" : "white";
 
+  const fontStyle: React.CSSProperties = {
+    fontSize: `${layout.fontSize}cqi`,
+    fontStyle: italic ? "italic" : "normal",
+    fontWeight: "bold",
+    lineHeight: 1.1,
+    textAlign: "center",
+    whiteSpace: "pre-line",
+  };
+
   return (
     <div
-      className="absolute cursor-move select-none hover:outline hover:outline-2 hover:outline-dashed hover:outline-white/50 rounded"
+      className={`absolute group rounded ${
+        editing
+          ? "outline outline-2 outline-[var(--accent)] cursor-text"
+          : "cursor-move select-none hover:outline hover:outline-2 hover:outline-dashed hover:outline-white/50"
+      }`}
+      title={onTextChange && !editing ? "Ziehen zum Verschieben · Doppelklick zum Bearbeiten" : undefined}
       style={{
         left: `${layout.x}%`, top: `${layout.y}%`,
         width: `${layout.w}%`, height: `${layout.h}%`,
         color, textShadow: shadow,
-        fontSize: `${layout.fontSize}cqi`,
-        fontStyle: italic ? "italic" : "normal",
-        fontWeight: "bold",
-        lineHeight: 1.1,
+        ...fontStyle,
         display: "flex", alignItems: "center", justifyContent: "center",
-        textAlign: "center",
-        touchAction: "none",
+        touchAction: editing ? "auto" : "none",
         ...(bannerOpacity > 0 && {
           background: `rgba(0,0,0,${bannerOpacity})`,
           padding: "0.5em 0.8em",
@@ -121,8 +160,46 @@ function DraggableText({
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onDoubleClick={startEditing}
     >
-      <span style={{ wordBreak: "break-word" }}>{text}</span>
+      {editing ? (
+        <textarea
+          ref={textareaRef}
+          value={text}
+          placeholder={placeholder}
+          rows={1}
+          onChange={(e) => onTextChange?.(e.target.value)}
+          onBlur={() => setEditing(false)}
+          onKeyDown={(e) => {
+            // Enter = neue Zeile; Esc oder Strg/Cmd+Enter = fertig
+            if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
+              e.preventDefault();
+              setEditing(false);
+            }
+          }}
+          className="w-full bg-transparent border-none outline-none resize-none overflow-hidden p-0 m-0"
+          style={{ font: "inherit", color: "inherit", textShadow: "inherit", textAlign: "center", whiteSpace: "pre-wrap" }}
+        />
+      ) : (
+        <span style={{ wordBreak: "break-word", whiteSpace: "pre-line" }}>
+          {text || placeholder}
+        </span>
+      )}
+      {onTextChange && !editing && (
+        <button
+          type="button"
+          aria-label="Text bearbeiten"
+          title="Text bearbeiten"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={startEditing}
+          className="absolute top-1 right-1 w-7 h-7 flex items-center justify-center rounded-full bg-white text-gray-700 shadow-md opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          style={{ fontSize: 14, textShadow: "none", fontStyle: "normal" }}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -144,14 +221,15 @@ function getFilterStyle(filter: string): React.CSSProperties {
 }
 
 function SlidePreview({
-  imageUrl, theme, dateStr, kirchenkalender, textColor,
+  imageUrl, theme, subtitle, onThemeChange, onSubtitleChange, textColor,
   titleLayout, subtitleLayout, onTitleLayoutChange, onSubtitleLayoutChange,
   imageFilter, textBanner, shadowStrength, textOutline,
 }: {
   imageUrl: string | null;
   theme: string;
-  dateStr: string;
-  kirchenkalender: string;
+  subtitle: string;
+  onThemeChange: (t: string) => void;
+  onSubtitleChange: (t: string) => void;
   textColor: string;
   titleLayout: TextLayout;
   subtitleLayout: TextLayout;
@@ -184,21 +262,25 @@ function SlidePreview({
         <div className="absolute inset-0 pointer-events-none" style={getFilterStyle(imageFilter)} />
       )}
       <DraggableText
-        text={theme || "Thema"}
+        text={theme}
+        placeholder="Thema"
         layout={titleLayout}
         color={textColor}
         italic
         onLayoutChange={onTitleLayoutChange}
+        onTextChange={onThemeChange}
         containerRef={containerRef}
         textBanner={textBanner}
         shadowStrength={shadowStrength}
         textOutline={textOutline}
       />
       <DraggableText
-        text={`Gottesdienst am ${dateStr}, ${kirchenkalender}`}
+        text={subtitle}
+        placeholder="Untertitel"
         layout={subtitleLayout}
         color={textColor}
         onLayoutChange={onSubtitleLayoutChange}
+        onTextChange={onSubtitleChange}
         containerRef={containerRef}
         textBanner={textBanner}
         shadowStrength={shadowStrength}
@@ -482,6 +564,11 @@ function InfoRow({
   );
 }
 
+// Untertitel wie im PowerPoint-Template: zwei Zeilen (Datum / Name des Sonntags)
+function defaultSubtitle(d: Pick<SheetData, "date_str" | "kirchenkalender">): string {
+  return `Gottesdienst am ${d.date_str},\n${d.kirchenkalender}`;
+}
+
 // --- Präsentations-Reiter ---
 export default function PresentationTab() {
   const [sheets, setSheets] = useState<Sheet[]>([]);
@@ -509,6 +596,8 @@ export default function PresentationTab() {
   const [textBanner, setTextBanner] = useState("none");
   const [shadowStrength, setShadowStrength] = useState("normal");
   const [textOutline, setTextOutline] = useState(false);
+  // Frei bearbeiteter Untertitel der Thema-Folie (null = automatisch aus Datum + Sonntag)
+  const [subtitleText, setSubtitleText] = useState<string | null>(null);
   const [quarterPattern, setQuarterPattern] = useState<string>("");
   const [showAllQuarters, setShowAllQuarters] = useState(false);
   // Layout-Positionen in % der Folie (aus PowerPoint: 9144000 x 6858000 EMU)
@@ -560,6 +649,7 @@ export default function PresentationTab() {
       setTextBanner("none");
       setShadowStrength("normal");
       setTextOutline(false);
+      setSubtitleText(null);
       setTitleLayout({ x: 6.9, y: 2.6, w: 86.2, h: 31.5, fontSize: 6.6 });
       setSubtitleLayout({ x: 10.6, y: 83.7, w: 78.9, h: 10.1, fontSize: 2.8 });
       const defaults: Record<string, boolean> = {};
@@ -770,6 +860,9 @@ export default function PresentationTab() {
     if (uploadedImagePath) {
       finalOverrides.image_path = uploadedImagePath;
     }
+    if (subtitleText !== null && data && subtitleText.trim() !== defaultSubtitle(data).trim()) {
+      finalOverrides.subtitle = subtitleText;
+    }
     if (eventsTouched) {
       // ID strippen – das Backend kennt nur die InvitationEvent-Felder
       finalOverrides.invitation_events = eventRows.map(({ id: _id, ...rest }) => rest);
@@ -882,6 +975,9 @@ export default function PresentationTab() {
   const orderedSections = sectionOrder
     .map((key) => allSections.find((s) => s.key === key))
     .filter((s): s is SectionInfo => !!s);
+
+  // Thema der Titelfolie – Übersicht und Vorschau bearbeiten denselben Wert
+  const themeText = (overrides.theme as string | undefined) ?? data?.theme ?? "";
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-6 sm:py-10 min-w-0">
@@ -1027,7 +1123,22 @@ export default function PresentationTab() {
               <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-3">
                 Übersicht
               </h3>
-              <InfoRow label="Thema" value={data.theme} onChange={(v) => handleOverride("theme", v)} />
+              <div className="flex items-start gap-4 py-2">
+                <span className="text-sm font-medium text-[var(--text-secondary)] w-28 shrink-0">
+                  Thema
+                </span>
+                <div className="flex-1">
+                  <textarea
+                    className="input-field w-full min-h-[60px] resize-y"
+                    rows={2}
+                    value={themeText}
+                    onChange={(e) => handleOverride("theme", e.target.value)}
+                  />
+                  <p className="text-xs text-[var(--text-secondary)] mt-1">
+                    Enter = neue Zeile auf der Folie. Text auch direkt in der Folien-Vorschau per Doppelklick bearbeitbar.
+                  </p>
+                </div>
+              </div>
               <InfoRow label="Begrüßung" value={data.greeting_verse} multiline onChange={(v) => handleOverride("greeting_verse", v)} />
               <InfoRow label="Lesung" value={data.lesung_reference} onChange={(v) => handleOverride("lesung_reference", v)} />
 
@@ -1177,15 +1288,30 @@ export default function PresentationTab() {
 
             {/* Folien-Vorschau — exakte PowerPoint-Positionen */}
             <div className="glass-card">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)] mb-3">
-                Folien-Vorschau
-              </h3>
+              <div className="flex items-center justify-between mb-3 gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                  Folien-Vorschau
+                </h3>
+                {subtitleText !== null && subtitleText !== defaultSubtitle(data) && (
+                  <button
+                    type="button"
+                    onClick={() => setSubtitleText(null)}
+                    className="text-xs font-medium text-[var(--accent)] hover:underline"
+                  >
+                    Untertitel zurücksetzen
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-[var(--text-secondary)] mb-2">
+                Texte ziehen zum Verschieben · Doppelklick (oder ✎) zum Bearbeiten · Enter = neue Zeile · Esc = fertig
+              </p>
 
               <SlidePreview
                 imageUrl={imageBlobUrl}
-                theme={(overrides.theme as string) || data.theme || ""}
-                dateStr={data.date_str}
-                kirchenkalender={data.kirchenkalender}
+                theme={themeText}
+                subtitle={subtitleText ?? defaultSubtitle(data)}
+                onThemeChange={(v) => handleOverride("theme", v)}
+                onSubtitleChange={setSubtitleText}
                 textColor={textColor}
                 titleLayout={titleLayout}
                 subtitleLayout={subtitleLayout}

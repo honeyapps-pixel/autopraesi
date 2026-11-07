@@ -332,7 +332,10 @@ def generate_presentation(req: GenerateRequest):
     if req.overrides:
         o = req.overrides
         if "theme" in o and o["theme"]:
-            data.theme = o["theme"]
+            # Zeilenumbrüche bleiben erhalten (werden in der Folie umgebrochen)
+            data.theme = o["theme"].replace("\r\n", "\n").strip()
+        if "subtitle" in o and o["subtitle"]:
+            data.subtitle = o["subtitle"].replace("\r\n", "\n").strip()
         if "greeting_verse" in o and o["greeting_verse"]:
             data.greeting_verse = o["greeting_verse"]
         if "lesung_reference" in o and o["lesung_reference"]:
